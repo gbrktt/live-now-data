@@ -7,8 +7,9 @@
 # fallo de la migración 0002 (`favorites.user_id` es uuid, no text).
 #
 # Uso:  bash scripts/preflight.sh
-# Lee SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY de .dev.vars (este repo) o de
-# ../live-now-api/.dev.vars. No escribe nada en la base de datos.
+# Lee SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY del entorno del proceso (CI) y, si
+# no están definidas, de .dev.vars (este repo) o de ../live-now-api/.dev.vars.
+# No escribe nada en la base de datos.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,13 +25,23 @@ read_var() { # $1 fichero  $2 clave
   [ -n "$v" ] && printf '%s' "$v"
 }
 
-ENV_FILE="$HERE/.dev.vars"
-[ -f "$ENV_FILE" ] || ENV_FILE="$HERE/../live-now-api/.dev.vars"
-URL=$(read_var "$ENV_FILE" SUPABASE_URL || true)
-KEY=$(read_var "$ENV_FILE" SUPABASE_SERVICE_ROLE_KEY || true)
+# Resolución de credenciales:
+#   1) entorno del proceso (GitHub Actions inyecta los Secrets así)
+#   2) .dev.vars de este repo
+#   3) ../live-now-api/.dev.vars
+URL="${SUPABASE_URL:-}"
+KEY="${SUPABASE_SERVICE_ROLE_KEY:-}"
+ENV_SRC="entorno del proceso"
+if [ -z "$URL" ] || [ -z "$KEY" ]; then
+  ENV_FILE="$HERE/.dev.vars"
+  [ -f "$ENV_FILE" ] || ENV_FILE="$HERE/../live-now-api/.dev.vars"
+  ENV_SRC="$ENV_FILE"
+  [ -n "$URL" ] || URL=$(read_var "$ENV_FILE" SUPABASE_URL || true)
+  [ -n "$KEY" ] || KEY=$(read_var "$ENV_FILE" SUPABASE_SERVICE_ROLE_KEY || true)
+fi
 
 if [ -z "${URL:-}" ] || [ -z "${KEY:-}" ]; then
-  echo "ERROR: faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (buscado en $ENV_FILE)" >&2
+  echo "ERROR: faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (entorno del proceso y $ENV_SRC)" >&2
   exit 2
 fi
 
@@ -43,7 +54,7 @@ count() { curl -s -I "$URL/rest/v1/$1" "${HDR[@]}" -H 'Prefer: count=exact' -H '
 rpc()   { curl -s -X POST "$URL/rest/v1/rpc/$1" "${HDR[@]}" -H 'Content-Type: application/json' -d "${2:-{\}}"; }
 
 echo "[preflight] destino: $URL"
-echo "[preflight] entorno:  $ENV_FILE"
+echo "[preflight] entorno:  $ENV_SRC"
 echo "[preflight] 1) esquema canónico (migración 20260914000001)"
 for spec in \
   "events:select=id,source,source_event_id,images,external_url,metadata,ingested_at,last_verified_at,is_active&limit=1" \
