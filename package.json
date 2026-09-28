@@ -1,0 +1,24 @@
+{
+  "name": "live-now-data",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Canonical Data Ingestion Layer para Live Now Music: modelo canónico, adaptadores de fuente, normalización y persistencia idempotente (primer adaptador: Ticketmaster Discovery API).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "run": "node src/run-local.ts",
+    "dry-run": "node src/run-local.ts --dry-run",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
+    "hono": "^4.12.27"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "typescript": "~5.9.2",
+    "wrangler": "^4.105.0"
+  }
+}

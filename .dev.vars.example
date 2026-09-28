@@ -1,0 +1,28 @@
+# Copia este fichero a `.dev.vars` y rellena tus valores.
+# En producción se definen como secrets en Cloudflare:
+#   npx wrangler secret put TICKETMASTER_API_KEY
+#   npx wrangler secret put SUPABASE_URL
+#   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+#   npx wrangler secret put INGEST_ADMIN_TOKEN
+
+# API Key de Ticketmaster Discovery API (portal: developer.ticketmaster.com)
+TICKETMASTER_API_KEY=pega-aqui-tu-api-key
+
+# Supabase (service role, solo para el worker de ingesta)
+SUPABASE_URL=https://xfaiaxykfqqpeuxkgeuy.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=pega-aqui-tu-service-role-key
+
+# Token admin para los endpoints POST /run del worker
+INGEST_ADMIN_TOKEN=cambia-este-token-secreto
+
+# Entorno: development | production
+ENV=development
+
+# Ciudades objetivo: `nombre|lat,lon|radioKm` separadas por `;`
+CITIES=madrid|40.4168,-3.7038|50;barcelona|41.3874,2.1686|50;valencia|39.4699,-0.3763|40;sevilla|37.3891,-5.9845|40;bilbao|43.2630,-2.9350|35
+
+# Días de lookahead del catálogo (T3)
+LOOKAHEAD_DAYS=63
+
+# Cuota diaria de llamadas a la API (límite Ticketmaster: 5000/día)
+DAILY_QUOTA=4000

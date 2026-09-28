@@ -1,0 +1,20 @@
+{
+  // live-now-ingest — Worker de ingesta canónica (Cron Triggers de Cloudflare)
+  "name": "live-now-ingest",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "triggers": {
+    "crons": [
+      "*/30 * * * *", // T1: próximas 48h (frescura now/tonight)
+      "0 3,11 * * *", // T2: próximos 7 días (estado de venta, repromesis)
+      "0 5 * * *"     // T3: catálogo completo (+lookahead) diario
+    ]
+  },
+  "vars": {
+    "ENV": "production",
+    "CITIES": "madrid|40.4168,-3.7038|50;barcelona|41.3874,2.1686|50;valencia|39.4699,-0.3763|40;sevilla|37.3891,-5.9845|40;bilbao|43.2630,-2.9350|35",
+    "LOOKAHEAD_DAYS": "63",
+    "DAILY_QUOTA": "4000"
+  }
+}

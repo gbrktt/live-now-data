@@ -1,0 +1,45 @@
+# ============================================================
+# ci.yml — Tier 1: checks de código del pipeline de datos.
+#
+# Los tests usan el type-stripping nativo de Node (`node --test test/*.ts`),
+# por eso el runner fija Node desde .nvmrc (24). Sin secretos: no toca Supabase.
+#
+# Equivalente local: npm run typecheck && npm test
+# Detalle y resto de tiers: ../live-now-music/.clinerules/46-ci.md
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  data-checks:
+    name: Datos · tsc + node --test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: TypeScript (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Tests (node --test)
+        run: npm test

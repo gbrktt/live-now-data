@@ -1,0 +1,17 @@
+# Dependencias
+node_modules/
+
+# Secretos locales (wrangler dev / CLI)
+.dev.vars
+
+# Cloudflare Wrangler
+.wrangler/
+.dev.vars.*.tmp
+
+# Logs y artefactos
+*.log
+dist/
+coverage/
+
+# macOS
+.DS_Store
