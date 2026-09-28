@@ -50,13 +50,26 @@ export function parseConfig(
     return value;
   }
 
+  /** Primera variable definida de la lista (nueva → legacy). */
+  function requiredAny(keys: string[]): string {
+    for (const key of keys) {
+      const value = env[key];
+      if (value && value.trim() !== '') return value;
+    }
+    throw new Error(`Falta una variable de entorno (ninguna de: ${keys.join(' | ')})`);
+  }
+
   const lookaheadDays = Number(env['LOOKAHEAD_DAYS'] ?? 63);
   const dailyQuota = Number(env['DAILY_QUOTA'] ?? 4000);
 
   return {
     ticketmasterApiKey: required('TICKETMASTER_API_KEY'),
     supabaseUrl: required('SUPABASE_URL'),
-    supabaseServiceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
+    // Clave de administrador: secret key nueva o service_role legacy.
+    supabaseServiceRoleKey: requiredAny([
+      'SUPABASE_SECRET_KEY',
+      'SUPABASE_SERVICE_ROLE_KEY',
+    ]),
     adminToken: required('INGEST_ADMIN_TOKEN'),
     env: env['ENV'] === 'production' ? 'production' : 'development',
     cities: parseCities(env['CITIES']),

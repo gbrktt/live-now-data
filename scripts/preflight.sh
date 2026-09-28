@@ -7,8 +7,9 @@
 # fallo de la migración 0002 (`favorites.user_id` es uuid, no text).
 #
 # Uso:  bash scripts/preflight.sh
-# Lee SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY del entorno del proceso (CI) y, si
-# no están definidas, de .dev.vars (este repo) o de ../live-now-api/.dev.vars.
+# Lee SUPABASE_URL y la clave de administrador (SUPABASE_SECRET_KEY, o la legacy
+# SUPABASE_SERVICE_ROLE_KEY) del entorno del proceso (CI) y, si no están
+# definidas, de .dev.vars (este repo) o de ../live-now-api/.dev.vars.
 # No escribe nada en la base de datos.
 set -euo pipefail
 
@@ -29,23 +30,31 @@ read_var() { # $1 fichero  $2 clave
 #   1) entorno del proceso (GitHub Actions inyecta los Secrets así)
 #   2) .dev.vars de este repo
 #   3) ../live-now-api/.dev.vars
+# Prioridad de clave: secret key nueva (sb_secret_…) > service_role legacy (JWT).
 URL="${SUPABASE_URL:-}"
-KEY="${SUPABASE_SERVICE_ROLE_KEY:-}"
+KEY="${SUPABASE_SECRET_KEY:-${SUPABASE_SERVICE_ROLE_KEY:-}}"
 ENV_SRC="entorno del proceso"
 if [ -z "$URL" ] || [ -z "$KEY" ]; then
   ENV_FILE="$HERE/.dev.vars"
   [ -f "$ENV_FILE" ] || ENV_FILE="$HERE/../live-now-api/.dev.vars"
   ENV_SRC="$ENV_FILE"
   [ -n "$URL" ] || URL=$(read_var "$ENV_FILE" SUPABASE_URL || true)
+  [ -n "$KEY" ] || KEY=$(read_var "$ENV_FILE" SUPABASE_SECRET_KEY || true)
   [ -n "$KEY" ] || KEY=$(read_var "$ENV_FILE" SUPABASE_SERVICE_ROLE_KEY || true)
 fi
 
 if [ -z "${URL:-}" ] || [ -z "${KEY:-}" ]; then
-  echo "ERROR: faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (entorno del proceso y $ENV_SRC)" >&2
+  echo "ERROR: faltan SUPABASE_URL / SUPABASE_SECRET_KEY (o la legacy SUPABASE_SERVICE_ROLE_KEY)" >&2
+  echo "       — revisa el entorno del proceso y $ENV_SRC" >&2
   exit 2
 fi
 
-HDR=(-H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+# Cabeceras: `apikey` siempre (sin él → 401). `Authorization: Bearer` SOLO con
+# la clave legacy: las claves nuevas (sb_…) no son JWT. Verificado 2026-09-28.
+HDR=(-H "apikey: $KEY")
+case "$KEY" in
+  eyJ*) HDR+=(-H "Authorization: Bearer $KEY") ;;
+esac
 ANON="00000000-0000-0000-0000-000000000000"
 
 req()   { curl -s "$URL/rest/v1/$1" "${HDR[@]}"; }

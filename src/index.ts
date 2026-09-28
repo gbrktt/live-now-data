@@ -23,7 +23,10 @@ import type { IngestResult } from './types.ts';
 export interface Env {
   TICKETMASTER_API_KEY: string;
   SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
+  /** Clave de administrador nueva (`sb_secret_…`) — la preferida. */
+  SUPABASE_SECRET_KEY?: string;
+  /** Clave de administrador legacy (JWT) — deprecada por Supabase. */
+  SUPABASE_SERVICE_ROLE_KEY?: string;
   INGEST_ADMIN_TOKEN: string;
   ENV?: string;
   CITIES?: string;
@@ -37,7 +40,11 @@ export interface Env {
 const SOURCE = 'ticketmaster' as const;
 
 function createSupabase(env: Env) {
-  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  const key = env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) {
+    throw new Error('Falta SUPABASE_SECRET_KEY (o SUPABASE_SERVICE_ROLE_KEY legacy)');
+  }
+  return createClient(env.SUPABASE_URL, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
