@@ -35,6 +35,12 @@ export interface OrchestratorOptions {
    * T2/T3 usan `country` para cobertura (ver src/config.ts).
    */
   scopeMode?: ScopeMode;
+  /**
+   * Scopes ya calculados. Las fuentes que no se particionan por ciudad (la
+   * agenda municipal de BCN devuelve el fichero entero) pasan aquí sus
+   * propias ventanas en vez de usar `buildScopes`.
+   */
+  scopes?: IngestScope[];
   /** Tamaño de ventana por scope (días). Menor = consultas más ligeras. */
   windowDays?: number;
   pageSize?: number;
@@ -80,15 +86,17 @@ export async function runIngest(
     onPage,
   } = opts;
 
-  const scopes = buildScopes({
-    cities,
-    from,
-    to,
-    windowDays,
-    source,
-    countryCode,
-    scopeMode,
-  });
+  const scopes =
+    opts.scopes ??
+    buildScopes({
+      cities,
+      from,
+      to,
+      windowDays,
+      source,
+      countryCode,
+      scopeMode,
+    });
   const effectiveScopes =
     maxScopes > 0 ? scopes.slice(0, maxScopes) : scopes;
   const stats: IngestStats = { ...EMPTY_STATS };
@@ -126,7 +134,9 @@ export async function runIngest(
       );
 
       for (const raw of batch.events) {
-        const canonical = normalizer.toCanonical(raw);
+        // El normalizador puede ser asíncrono (agenda municipal: deriva el
+        // venue_id de la dirección), así que se espera siempre.
+        const canonical = await normalizer.toCanonical(raw);
         if (!canonical) {
           stats.skippedInvalid += 1;
           continue;
@@ -170,6 +180,11 @@ export async function runIngest(
     scopesProcessed += 1;
     lastScope = scope.key;
   }
+
+  // El writer agrupa las escrituras en lotes (límite de 50 subpeticiones de
+  // Cloudflare): hay que volcarlos ANTES de que la fase 2 lea de la BD, o sus
+  // duplicados aún no existirían y pasarían inadvertidos.
+  await writer.flush?.();
 
   // Fase 2 (C2): resolver duplicados con TODO lo que se acaba de escribir más
   // lo que ya había en la BD con la misma huella. Opcional en el contrato: los

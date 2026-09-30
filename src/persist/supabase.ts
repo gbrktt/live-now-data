@@ -50,6 +50,70 @@ export class SupabaseWriter implements IngestWriter {
     });
   }
 
+  /**
+   * Escribe en lote y devuelve el mapa `sourceVenueId -> id`.
+   *
+   * Por qué: Cloudflare limita a 50 subpeticiones por invocación de Worker. Con
+   * un upsert por fila, la agenda municipal (157 salas distintas en un T3)
+   * reventaba con "Too many subrequests by single Worker invocation". Agrupar
+   * en un solo POST por lote deja el margen de sobra y además va más rápido.
+   *
+   * Por qué no en el orquestador: el writer es quien conoce la clave de
+   * conflicto y el `venueIdCache`; meter el buffer aquí mantiene el contrato
+   * `IngestWriter` intacto para el resto de ingestas.
+   */
+  private venueBatch: Array<Record<string, unknown>> = [];
+  private eventBatch: Array<Record<string, unknown>> = [];
+  private instanceBatch: Array<Record<string, unknown>> = [];
+  /** Subpeticiones consumidas en la invocación actual. */
+  private requestCount = 0;
+  private static readonly MAX_REQUESTS = 40;
+  private static readonly VENUE_BATCH_SIZE = 200;
+  private static readonly ROW_BATCH_SIZE = 100;
+
+  private async flushVenues(): Promise<void> {
+    if (this.venueBatch.length === 0) return;
+    const rows = this.venueBatch;
+    this.venueBatch = [];
+    this.requestCount += 1;
+    const { error } = await this.client
+      .from('venues')
+      .upsert(rows, { onConflict: 'id' });
+    if (error) throw error;
+  }
+
+  /** Vuelca eventos e instancias en un POST cada uno. */
+  private async flushRows(): Promise<void> {
+    const events = this.eventBatch;
+    const instances = this.instanceBatch;
+    this.eventBatch = [];
+    this.instanceBatch = [];
+    if (events.length > 0) {
+      this.requestCount += 1;
+      const { error } = await this.client
+        .from('events')
+        .upsert(events, { onConflict: 'id' });
+      if (error) throw error;
+    }
+    if (instances.length > 0) {
+      this.requestCount += 1;
+      const { error } = await this.client
+        .from('event_instances')
+        .upsert(instances, { onConflict: 'id' });
+      if (error) throw error;
+    }
+  }
+
+  /**
+   * Vuelca TODO lo pendiente. Lo llama el orquestador al cerrar la corrida:
+   * sin esto, los últimos eventos de un lote grande se quedarían sin escribir.
+   */
+  async flush(): Promise<void> {
+    if (this.dryRun) return;
+    await this.flushVenues();
+    await this.flushRows();
+  }
+
   async upsertVenue(venue: CanonicalVenue): Promise<string | null> {
     const cacheKey = `${venue.source}:${venue.sourceVenueId}`;
     const cached = this.venueIdCache.get(cacheKey);
@@ -62,25 +126,25 @@ export class SupabaseWriter implements IngestWriter {
     ]);
 
     if (!this.dryRun) {
-      const { error } = await this.client
-        .from('venues')
-        .upsert(
-          {
-            id,
-            name: venue.name,
-            lat: venue.lat,
-            lng: venue.lng,
-            address: venue.address,
-            city: venue.city,
-            noise_level: venue.noiseLevel,
-            source: venue.source,
-            source_venue_id: venue.sourceVenueId,
-            timezone: venue.timezone,
-            external_url: venue.externalUrl,
-          },
-          { onConflict: 'id' },
-        );
-      if (error) throw error;
+      this.venueBatch.push({
+        id,
+        name: venue.name,
+        lat: venue.lat,
+        lng: venue.lng,
+        address: venue.address,
+        city: venue.city,
+        noise_level: venue.noiseLevel,
+        source: venue.source,
+        source_venue_id: venue.sourceVenueId,
+        timezone: venue.timezone,
+        external_url: venue.externalUrl,
+      });
+      if (
+        this.venueBatch.length >= SupabaseWriter.VENUE_BATCH_SIZE ||
+        this.requestCount >= SupabaseWriter.MAX_REQUESTS
+      ) {
+        await this.flushVenues();
+      }
     }
 
     this.venueIdCache.set(cacheKey, id);
@@ -192,46 +256,30 @@ export class SupabaseWriter implements IngestWriter {
       : event.isActive;
 
     if (!this.dryRun) {
-      const { error: evErr } = await this.client
-        .from('events')
-        .upsert(
-          {
-            id: eventId,
-            venue_id: venueId,
-            title: event.title,
-            description: event.description,
-            genre: event.genre,
-            price_from: event.priceFrom,
-            price_to: event.priceTo,
-            starts_at: first?.startsAt ?? null,
-            ends_at: first?.endsAt ?? null,
-            is_recurring: event.occurrences.length > 1,
-            source: event.source,
-            source_event_id: event.sourceEventId,
-            external_url: event.externalUrl,
-            images: event.images.length > 0 ? event.images : null,
-            metadata: event.metadata,
-            is_active: isActive,
-            last_verified_at: this.now.toISOString(),
-            dedupe_key: dedupeKey,
-            venue_name_key: venueNameKey,
-          },
-          { onConflict: 'id' },
-        );
-      if (evErr) throw evErr;
-    }
-    eventsUpserted += 1;
+      this.eventBatch.push({
+        id: eventId,
+        venue_id: venueId,
+        title: event.title,
+        description: event.description,
+        genre: event.genre,
+        price_from: event.priceFrom,
+        price_to: event.priceTo,
+        starts_at: first?.startsAt ?? null,
+        ends_at: first?.endsAt ?? null,
+        is_recurring: event.occurrences.length > 1,
+        source: event.source,
+        source_event_id: event.sourceEventId,
+        external_url: event.externalUrl,
+        images: event.images.length > 0 ? event.images : null,
+        metadata: event.metadata,
+        is_active: isActive,
+        last_verified_at: this.now.toISOString(),
+        dedupe_key: dedupeKey,
+        venue_name_key: venueNameKey,
+      });
 
-    // Género que `mapGenre` no reconoce: se registra para poder mapearlo luego
-    // sin desplegar código (bucle de mejora).
-    if (event.genre === null) {
-      await this.registerUnmappedGenre(event);
-    }
-
-    if (!this.dryRun && event.occurrences.length > 0) {
-      const rows = [];
       for (const occ of event.occurrences) {
-        rows.push({
+        this.instanceBatch.push({
           id: await deterministicUuid([
             event.source,
             'instance',
@@ -246,10 +294,25 @@ export class SupabaseWriter implements IngestWriter {
         });
       }
 
-      const { error: insErr } = await this.client
-        .from('event_instances')
-        .upsert(rows, { onConflict: 'id' });
-      if (insErr) throw insErr;
+      // Se vuelcan juntos: los lotes se agrupan para no gastar una
+      // subpetición por fila (límite de 50 por invocación en Cloudflare).
+      if (
+        this.eventBatch.length >= SupabaseWriter.ROW_BATCH_SIZE ||
+        this.requestCount >= SupabaseWriter.MAX_REQUESTS
+      ) {
+        await this.flushRows();
+      }
+    }
+    eventsUpserted += 1;
+
+    // Género que `mapGenre` no reconoce: se registra para poder mapearlo luego
+    // sin desplegar código (bucle de mejora).
+    if (event.genre === null) {
+      await this.registerUnmappedGenre(event);
+    }
+
+    if (!this.dryRun && event.occurrences.length > 0) {
+      // Ya encoladas arriba, junto a su evento.
     }
     instancesUpserted += event.occurrences.length;
 
