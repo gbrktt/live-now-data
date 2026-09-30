@@ -17,7 +17,7 @@ import type {
   Normalizer,
   SourceCode,
 } from './types.ts';
-import { buildScopes, type CityScopeConfig } from './scopes.ts';
+import { buildScopes, type CityScopeConfig, type ScopeMode } from './scopes.ts';
 
 export interface OrchestratorOptions {
   source: SourceCode;
@@ -28,6 +28,11 @@ export interface OrchestratorOptions {
   to: Date;
   cities: CityScopeConfig[];
   countryCode?: string;
+  /**
+   * Particionado del barrido. Por defecto `city` (comportamiento previo);
+   * T2/T3 usan `country` para cobertura (ver src/config.ts).
+   */
+  scopeMode?: ScopeMode;
   /** Tamaño de ventana por scope (días). Menor = consultas más ligeras. */
   windowDays?: number;
   pageSize?: number;
@@ -64,6 +69,7 @@ export async function runIngest(
     to,
     cities,
     countryCode = 'ES',
+    scopeMode = 'city',
     windowDays = 10,
     pageSize = 200,
     maxPagesPerScope = 5,
@@ -72,7 +78,15 @@ export async function runIngest(
     onPage,
   } = opts;
 
-  const scopes = buildScopes({ cities, from, to, windowDays, source, countryCode });
+  const scopes = buildScopes({
+    cities,
+    from,
+    to,
+    windowDays,
+    source,
+    countryCode,
+    scopeMode,
+  });
   const effectiveScopes =
     maxScopes > 0 ? scopes.slice(0, maxScopes) : scopes;
   const stats: IngestStats = { ...EMPTY_STATS };

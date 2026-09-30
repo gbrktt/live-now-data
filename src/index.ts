@@ -11,6 +11,7 @@ import { TicketmasterAdapter } from './adapters/ticketmaster.ts';
 import {
   fromToForTier,
   parseConfig,
+  scopeModeForTier,
   TIERS,
   tierFromCron,
   type Tier,
@@ -33,6 +34,8 @@ export interface Env {
   LOOKAHEAD_DAYS?: string;
   DAILY_QUOTA?: string;
   COUNTRY_CODE?: string;
+  /** Fuerza el modo de barrido (`city`/`country`/`hybrid`) en todos los tiers. */
+  SCOPE_MODE?: string;
   // Index signature para poder pasar Env a parseConfig (Record<string, string|undefined>).
   [key: string]: string | undefined;
 }
@@ -77,6 +80,7 @@ async function runOnce(env: Env, tier: Tier, dryRun: boolean): Promise<RunOnceRe
     to,
     cities: config.cities,
     countryCode: config.countryCode,
+    scopeMode: scopeModeForTier(tier, config.scopeMode),
     windowDays: TIERS[tier].windowDays,
     dailyQuota: config.dailyQuota,
   });

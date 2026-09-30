@@ -7,7 +7,12 @@
  *   npm run dry-run        # solo consulta a Ticketmaster, NO escribe
  *   node src/run-local.ts --tier T1 --dry-run
  *   node src/run-local.ts --cities "madrid|40.4168,-3.7038|50"
+ *   node src/run-local.ts --tier T3 --scope-mode country    # barrido por país
+ *   node src/run-local.ts --tier T3 --scope-mode hybrid     # país + ciudades
  *   node src/run-local.ts --scope-limit 1     # solo el primer scope (prueba)
+ *
+ * Por defecto el modo de barrido es el de cada tier (T1 ciudad, T2/T3 país);
+ * `--scope-mode` lo fuerza.
  *
  * Lee las variables de un `.dev.vars` en la raíz del repo y de process.env.
  */
@@ -20,7 +25,7 @@ import { fromToForTier, parseConfig, TIERS, type Tier } from './config.ts';
 import { TicketmasterNormalizer } from './normalize/ticketmaster.ts';
 import { runIngest } from './orchestrator.ts';
 import { SupabaseWriter } from './persist/supabase.ts';
-import type { CityScopeConfig } from './scopes.ts';
+import { parseScopeMode, type CityScopeConfig, type ScopeMode } from './scopes.ts';
 
 function loadDevVars(): Record<string, string> {
   try {
@@ -56,12 +61,14 @@ function parseFlags(argv: string[]): {
   tier: Tier;
   scopeLimit: number;
   citiesArg: string | null;
+  scopeMode: ScopeMode | undefined;
 } {
   return {
     dryRun: argv.includes('--dry-run'),
     tier: parseTier(getArg('--tier')),
     scopeLimit: Number(getArg('--scope-limit') ?? 0),
     citiesArg: getArg('--cities') ?? null,
+    scopeMode: parseScopeMode(getArg('--scope-mode')),
   };
 }
 
@@ -118,10 +125,14 @@ async function main(): Promise<void> {
     `[live-now-data] tier=${flags.tier} dryRun=${flags.dryRun} ` +
       `from=${from.toISOString()} to=${to.toISOString()}`
   );
+  const scopeMode = flags.scopeMode ?? config.scopeMode ?? TIERS[flags.tier].scopeMode;
   console.log(
-    `[live-now-data] ciudades: ${effectiveCities
-      .map((c) => `${c.city}@${c.radiusKm}km`)
-      .join(', ')}`
+    `[live-now-data] scopeMode=${scopeMode}` +
+      (scopeMode === 'country'
+        ? ` país=${config.countryCode} (sin geo)`
+        : ` ciudades: ${effectiveCities
+            .map((c) => `${c.city}@${c.radiusKm}km`)
+            .join(', ')}`)
   );
   console.log(`[live-now-data] cuota diaria=${config.dailyQuota}`);
 
@@ -134,6 +145,7 @@ async function main(): Promise<void> {
     to,
     cities: effectiveCities,
     countryCode: config.countryCode,
+    scopeMode,
     windowDays: TIERS[flags.tier].windowDays,
     dailyQuota: config.dailyQuota,
     maxScopes: flags.scopeLimit,

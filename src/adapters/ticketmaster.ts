@@ -10,6 +10,9 @@
  *   `source=ticketmaster` devuelve 0 resultados en ES).
  * - Geo: el filtro por radio (`latlong`+`radius`) debe ir SIN `countryCode`:
  *   la combinación geo+country devuelve 0 resultados (verificado 2026-09-14).
+ *   El barrido por país (scope sin `latlong`) sí envía `countryCode` a secas:
+ *   es el modo de mayor cobertura (353 eventos ES en 63 días, medido
+ *   2026-09-30) y es lo que usa T2/T3.
  */
 
 import type {
@@ -76,13 +79,16 @@ export class TicketmasterAdapter implements EventSourceAdapter {
       size: String(size),
       page: String(page),
     });
-    // `city` y `countryCode` son etiquetas del scope, no filtros de la API:
-    // `city` no es un parámetro de la Discovery API y `countryCode` combinado
-    // con geo (`latlong`+`radius`) devuelve 0 resultados. `source` interno del
-    // scope ('ticketmaster') tampoco se envía: en la API `source=` es el canal
-    // de venta y `source=ticketmaster` devuelve 0 en ES.
+    // `city` y el `source` interno del scope ('ticketmaster') no se envían:
+    // `city` no es un parámetro de la Discovery API y en la API `source=` es
+    // el canal de venta (`ticketmaster`, `universe`, `frontgate`…), que no
+    // filtra música y devuelve 0 resultados en ES.
     for (const [key, value] of Object.entries(scope.params)) {
-      if (key === 'city' || key === 'countryCode' || key === 'source') continue;
+      if (key === 'city' || key === 'source') continue;
+      // `countryCode` solo viaja en el barrido por PAÍS (scope sin `latlong`).
+      // Combinado con el filtro geo (`latlong`+`radius`) la API devuelve 0
+      // resultados (verificado 2026-09-14), por eso se omite cuando hay radio.
+      if (key === 'countryCode' && scope.params['latlong']) continue;
       params.set(
         key,
         key === 'startDateTime' || key === 'endDateTime'
