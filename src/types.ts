@@ -84,6 +84,12 @@ export interface IngestStats {
   eventsUpserted: number;
   instancesUpserted: number;
   skippedInvalid: number;
+  /** Aliases escritos en `event_aliases` (C2). */
+  aliasesWritten?: number;
+  /** Perdedores ocultados por fusión automática (C2). */
+  duplicatesHidden?: number;
+  /** Aliases en cola de revisión: registrados pero NO ocultados (C2). */
+  duplicatesForReview?: number;
 }
 
 export type IngestResultStatus =
@@ -99,6 +105,26 @@ export interface IngestResult {
   lastScope: string | null;
 }
 
+/** Fila mínima que el writer necesita para decidir una fusión (ver ingest/dedupe.ts). */
+export interface DedupeCandidateRow {
+  source: SourceCode;
+  sourceEventId: string;
+  eventId: string;
+  title: string;
+  dedupeKey: string;
+  venueNameKey: string;
+  isActive: boolean;
+}
+
+export interface DedupeReconcileResult {
+  /** Aliases escritos en `event_aliases`. */
+  aliases: number;
+  /** Perdedores ocultados (`is_active = false` + `merged_into`). */
+  hidden: number;
+  /** Aliases de la cola de revisión (registrados, NO ocultados). */
+  reviewOnly: number;
+}
+
 /** Contrato de persistencia (idempotente). dryRun = no escribe. */
 export interface IngestWriter {
   readonly dryRun: boolean;
@@ -106,5 +132,12 @@ export interface IngestWriter {
   upsertEventWithInstances(
     event: CanonicalEvent,
     venueId: string
-  ): Promise<{ eventsUpserted: number; instancesUpserted: number }>;
+  ): Promise<{ eventId: string; eventsUpserted: number; instancesUpserted: number }>;
+  /**
+   * Fase 2 de la ingesta: resolver entidades duplicadas. Opcional para no
+   * obligar a los dobles de test a implementarlo.
+   */
+  reconcileDuplicates?(
+    candidates: DedupeCandidateRow[]
+  ): Promise<DedupeReconcileResult>;
 }

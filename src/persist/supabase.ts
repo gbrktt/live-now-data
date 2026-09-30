@@ -7,9 +7,17 @@
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import {
+  buildDedupeKey,
+  normalizeText,
+  planDedupe,
+  type DedupeCandidate,
+} from '../ingest/dedupe.ts';
 import type {
   CanonicalEvent,
   CanonicalVenue,
+  DedupeCandidateRow,
+  DedupeReconcileResult,
   IngestWriter,
 } from '../types.ts';
 import { deterministicUuid } from '../utils/uuid.ts';
@@ -28,6 +36,11 @@ export class SupabaseWriter implements IngestWriter {
   private readonly venueIdCache = new Map<string, string>();
   /** Pares (genre, subGenre) ya registrados como no mapeados en esta corrida. */
   private readonly registeredGenreKeys = new Set<string>();
+  /**
+   * `source:sourceEventId` que ya están fusionados (`event_aliases`). Se carga
+   * una vez por corrida y evita que el upsert RESUCITE un evento fusionado.
+   */
+  private aliasLosers: Set<string> | null = null;
 
   constructor(opts: SupabaseWriterOptions) {
     this.dryRun = opts.dryRun ?? false;
@@ -119,10 +132,36 @@ export class SupabaseWriter implements IngestWriter {
     if (error) throw error;
   }
 
+  /**
+   * Carga (una sola vez por writer) los alias ya conocidos. Sin esto, el upsert
+   * de la fase 1 pondría `is_active = true` sobre un evento que la fase 2 ya
+   * había fusionado: si la fase 2 fallara, el duplicado volvería a verse en el
+   * feed. Con esto la fusión es duradera y la fase 2 solo descubre duplicados
+   * NUEVOS.
+   */
+  private async ensureAliasLosersLoaded(source: string): Promise<void> {
+    if (this.aliasLosers !== null || this.dryRun) return;
+    const { data, error } = await this.client
+      .from('event_aliases')
+      .select('source, source_event_id')
+      .eq('source', source);
+    if (error) throw error;
+    this.aliasLosers = new Set(
+      (data ?? []).map(
+        (row) => `${row['source']}:${row['source_event_id']}`
+      )
+    );
+  }
+
+  /** ¿Este (source, id) ya perdió una fusión anterior? */
+  private isKnownLoser(source: string, sourceEventId: string): boolean {
+    return this.aliasLosers?.has(`${source}:${sourceEventId}`) ?? false;
+  }
+
   async upsertEventWithInstances(
     event: CanonicalEvent,
     venueId: string
-  ): Promise<{ eventsUpserted: number; instancesUpserted: number }> {
+  ): Promise<{ eventId: string; eventsUpserted: number; instancesUpserted: number }> {
     const eventId = await deterministicUuid([
       event.source,
       'event',
@@ -131,6 +170,26 @@ export class SupabaseWriter implements IngestWriter {
     const first = event.occurrences[0];
     let eventsUpserted = 0;
     let instancesUpserted = 0;
+
+    // Claves de deduplicación (C2). Se calculan SIEMPRE, también en dryRun,
+    // para que el plan de fusión se pueda inspeccionar sin escribir.
+    const startsAt = first?.startsAt ?? null;
+    const dedupeKey =
+      startsAt !== null
+        ? buildDedupeKey({
+            title: event.title,
+            startsAt,
+            lat: event.venue.lat,
+            lng: event.venue.lng,
+          })
+        : null;
+    const venueNameKey = normalizeText(event.venue.name);
+
+    // Un evento ya fusionado no vuelve a activarse aunque la fuente lo devuelva.
+    await this.ensureAliasLosersLoaded(event.source);
+    const isActive = this.isKnownLoser(event.source, event.sourceEventId)
+      ? false
+      : event.isActive;
 
     if (!this.dryRun) {
       const { error: evErr } = await this.client
@@ -152,8 +211,10 @@ export class SupabaseWriter implements IngestWriter {
             external_url: event.externalUrl,
             images: event.images.length > 0 ? event.images : null,
             metadata: event.metadata,
-            is_active: event.isActive,
+            is_active: isActive,
             last_verified_at: this.now.toISOString(),
+            dedupe_key: dedupeKey,
+            venue_name_key: venueNameKey,
           },
           { onConflict: 'id' },
         );
@@ -192,6 +253,131 @@ export class SupabaseWriter implements IngestWriter {
     }
     instancesUpserted += event.occurrences.length;
 
-    return { eventsUpserted, instancesUpserted };
+    return { eventId, eventsUpserted, instancesUpserted };
+  }
+
+  /**
+   * Fase 2 de la ingesta: resolver entidades duplicadas.
+   *
+   * Busca también en la BD las filas con la MISMA huella que llegaron en
+   * corridas anteriores (un par duplicado puede entrar en lotes distintos:
+   * T1 captura uno y T3 el otro). Sin esa búsqueda el dedupe solo valdría
+   * dentro de la corrida.
+   *
+   * Nunca borra: escribe el alias y marca el perdedor `is_active = false`
+   * (el feed ya lo excluye). Los favoritos cuelgan de `event_instance_id`,
+   * y las instancias del perdedor se conservan → ningún favorito se rompe.
+   */
+  async reconcileDuplicates(
+    candidates: DedupeCandidateRow[]
+  ): Promise<DedupeReconcileResult> {
+    const empty: DedupeReconcileResult = { aliases: 0, hidden: 0, reviewOnly: 0 };
+    if (candidates.length === 0) return empty;
+
+    const keys = [...new Set(candidates.map((c) => c.dedupeKey))].filter(
+      (k): k is string => typeof k === 'string' && k.length > 0
+    );
+    if (keys.length === 0) return empty;
+
+    // 1) Filas ya en la BD con esas huellas (pueden ser de corridas previas).
+    const byEventId = new Map<string, DedupeCandidate>();
+    const addCandidate = (row: DedupeCandidate): void => {
+      if (typeof row.dedupeKey !== 'string' || row.dedupeKey.length === 0) return;
+      const existing = byEventId.get(row.eventId);
+      // Gana la fila más reciente/activa: una ya fusionada manda sobre la vista.
+      if (!existing || (row.isActive && !existing.isActive)) {
+        byEventId.set(row.eventId, row);
+      }
+    };
+
+    if (!this.dryRun) {
+      for (let i = 0; i < keys.length; i += 100) {
+        const slice = keys.slice(i, i + 100);
+        const { data, error } = await this.client
+          .from('events')
+          .select('id, source, source_event_id, title, dedupe_key, venue_name_key, is_active')
+          .in('dedupe_key', slice);
+        if (error) throw error;
+        for (const row of data ?? []) {
+          addCandidate({
+            eventId: row['id'] as string,
+            source: row['source'] as DedupeCandidate['source'],
+            sourceEventId: (row['source_event_id'] as string) ?? '',
+            title: (row['title'] as string) ?? '',
+            dedupeKey: (row['dedupe_key'] as string) ?? '',
+            venueNameKey: (row['venue_name_key'] as string) ?? '',
+            isActive: row['is_active'] !== false,
+          });
+        }
+      }
+    }
+
+    // 2) Las que acaba de escribir esta corrida.
+    for (const candidate of candidates) {
+      addCandidate({
+        eventId: candidate.eventId,
+        source: candidate.source,
+        sourceEventId: candidate.sourceEventId,
+        title: candidate.title,
+        dedupeKey: candidate.dedupeKey,
+        venueNameKey: candidate.venueNameKey,
+        isActive: candidate.isActive,
+      });
+    }
+
+    const plan = planDedupe([...byEventId.values()]);
+
+    let aliases = 0;
+    let hidden = 0;
+    let reviewOnly = 0;
+
+    if (!this.dryRun) {
+      for (const decision of plan.decisions) {
+        const { error: aliasErr } = await this.client
+          .from('event_aliases')
+          .upsert(
+            {
+              source: decision.loser.source,
+              source_event_id: decision.loser.sourceEventId,
+              canonical_event_id: decision.canonical.eventId,
+              confidence: decision.confidence,
+              reason: decision.reason,
+            },
+            { onConflict: 'source,source_event_id' },
+          );
+        if (aliasErr) throw aliasErr;
+        aliases += 1;
+        // La caché de perdedores se mantiene al día para el resto de la corrida.
+        this.aliasLosers?.add(
+          `${decision.loser.source}:${decision.loser.sourceEventId}`
+        );
+
+        // Solo la fusión automática oculta. La cola de revisión deja el evento
+        // visible: dos funciones en salas distintas son un dato legítimo.
+        if (!decision.auto) {
+          reviewOnly += 1;
+          continue;
+        }
+
+        // `.select('id')` + el filtro `is_active = true` hace que `hidden`
+        // cuente filas REALMENTE cambiadas. Sin esto, cada corrida volvería a
+        // contar como "duplicados ocultados" los que ya estaban fusionados y la
+        // métrica crecería sin parar (engañando a Sentinel).
+        const { data: hiddenRows, error: hideErr } = await this.client
+          .from('events')
+          .update({ is_active: false, merged_into: decision.canonical.eventId })
+          .eq('id', decision.loser.eventId)
+          .eq('is_active', true)
+          .select('id');
+        if (hideErr) throw hideErr;
+        hidden += hiddenRows?.length ?? 0;
+      }
+    } else {
+      aliases = plan.decisions.length;
+      hidden = plan.autoMerges;
+      reviewOnly = plan.reviewOnly;
+    }
+
+    return { aliases, hidden, reviewOnly };
   }
 }

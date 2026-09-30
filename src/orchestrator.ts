@@ -18,6 +18,8 @@ import type {
   SourceCode,
 } from './types.ts';
 import { buildScopes, type CityScopeConfig, type ScopeMode } from './scopes.ts';
+import { buildDedupeKey, normalizeText } from './ingest/dedupe.ts';
+import type { DedupeCandidateRow } from './types.ts';
 
 export interface OrchestratorOptions {
   source: SourceCode;
@@ -93,6 +95,10 @@ export async function runIngest(
   let scopesProcessed = 0;
   let lastScope: string | null = null;
 
+  // Fase 2 (C2): huellas tocadas en esta corrida, para resolver duplicados al
+  // final. El writer también busca las que ya estaban en la BD.
+  const dedupeCandidates: DedupeCandidateRow[] = [];
+
   if (scopes.length === 0) {
     return { status: 'no-scopes', stats, scopesProcessed: 0, lastScope: null };
   }
@@ -132,11 +138,29 @@ export async function runIngest(
           continue;
         }
 
-        const { eventsUpserted, instancesUpserted } =
+        const { eventId, eventsUpserted, instancesUpserted } =
           await writer.upsertEventWithInstances(canonical, venueId);
         stats.venuesUpserted += 1;
         stats.eventsUpserted += eventsUpserted;
         stats.instancesUpserted += instancesUpserted;
+
+        const firstStart = canonical.occurrences[0]?.startsAt;
+        if (firstStart) {
+          dedupeCandidates.push({
+            source: canonical.source,
+            sourceEventId: canonical.sourceEventId,
+            eventId,
+            title: canonical.title,
+            dedupeKey: buildDedupeKey({
+              title: canonical.title,
+              startsAt: firstStart,
+              lat: canonical.venue.lat,
+              lng: canonical.venue.lng,
+            }),
+            venueNameKey: normalizeText(canonical.venue.name),
+            isActive: canonical.isActive,
+          });
+        }
       }
 
       page += 1;
@@ -145,6 +169,22 @@ export async function runIngest(
 
     scopesProcessed += 1;
     lastScope = scope.key;
+  }
+
+  // Fase 2 (C2): resolver duplicados con TODO lo que se acaba de escribir más
+  // lo que ya había en la BD con la misma huella. Opcional en el contrato: los
+  // dobles de test no lo implementan.
+  if (writer.reconcileDuplicates) {
+    try {
+      const result = await writer.reconcileDuplicates(dedupeCandidates);
+      stats.aliasesWritten = result.aliases;
+      stats.duplicatesHidden = result.hidden;
+      stats.duplicatesForReview = result.reviewOnly;
+    } catch (error) {
+      // La ingesta ya está escrita: un fallo de dedupe no debe abortarla.
+      // Queda registrado en ingest_runs.error y se ve en Sentinel.
+      console.error('[ingest] reconcileDuplicates falló', error);
+    }
   }
 
   const status: IngestResult['status'] =

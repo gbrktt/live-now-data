@@ -25,6 +25,7 @@ const stubWriter: IngestWriter = {
   dryRun: true,
   upsertVenue: async () => null,
   upsertEventWithInstances: async () => ({
+    eventId: 'aaaaaaaa-0000-5000-8000-000000000000',
     eventsUpserted: 0,
     instancesUpserted: 0,
   }),
