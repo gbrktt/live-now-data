@@ -12,21 +12,34 @@ describe('BCN_TITLE_GENRE', () => {
     assert.ok(keys.every((k) => k.length > 0));
   });
 
-  it('solo usa generos que la app conoce, o null', () => {
-    const valid = new Set(['jazz', 'rock', 'indie', 'electronic', 'pop', null]);
+  it('solo usa generos que la app conoce', () => {
+    const valid = new Set([
+      'jazz',
+      'rock',
+      'indie',
+      'electronic',
+      'pop',
+      'classical',
+    ]);
     for (const [title, genre] of Object.entries(BCN_TITLE_GENRE)) {
       assert.ok(
         valid.has(genre),
-        `"${title}" -> ${String(genre)} no es un genero de la app`
+        `"${title}" -> ${String(genre)} no es un género de la app`
       );
     }
   });
 
-  // La música clásica es el 40 % de la tabla y la app NO tiene ese género.
-  // Decidido: se deja en null en vez de forzar a 'pop'.
-  it('la musica clasica queda en null, no forzada a otro genero', () => {
-    const classics = Object.values(BCN_TITLE_GENRE).filter((g) => g === null);
-    assert.ok(classics.length > 300, `esperaba muchos null, hay ${classics.length}`);
+  // La música clásica es el 42 % de la tabla. Estuvo en `null` hasta que la app
+  // añadió el género (2026-09-30): no se forzó a `pop`.
+  it('la música clásica se mapea a classical, no se forzó a otro género', () => {
+    const classics = Object.entries(BCN_TITLE_GENRE).filter(
+      ([, g]) => g === 'classical'
+    );
+    assert.ok(classics.length > 300, `esperaba >300 clásicas, hay ${classics.length}`);
+    assert.ok(
+      Object.values(BCN_TITLE_GENRE).every((g) => g !== null),
+      'la tabla no debe contener null'
+    );
   });
 });
 

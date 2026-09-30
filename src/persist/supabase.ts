@@ -320,6 +320,83 @@ export class SupabaseWriter implements IngestWriter {
   }
 
   /**
+   * B6 · higiene. Retira (`is_active = false`, nunca borra) dos clases de
+   * eventos que la ingesta deja zombis:
+   *
+   *  1. **Terminados**: `ends_at` (o `starts_at`) anterior al corte. La
+   *     migración 0004 ya los saca del feed, pero seguían `is_active = true`
+   *     (14 filas al medir esto) y contaban como catálogo vivo.
+   *  2. **Desaparecidos**: la fuente ya no los devuelve en su ventana y aún no
+   *     han empezado (15 filas sin `dedupe_key`, o sea que ninguna corrida
+   *     posterior los ha vuelto a ver). Un concierto cancelado o programado
+   *     fuera de ventana se queda así para siempre si nadie lo retira.
+   *
+   * El primero es barato y siempre válido. El segundo necesita un tope de
+   * gracia: un evento de hoy puede caer fuera de la ventana del T3 y volver
+   * mañana, así que solo se retiran los que empiezan con `gracePeriodHours`
+   * de antelación (por defecto 12 h).
+   */
+  async retireStale(
+    source: string,
+    seenSourceEventIds: string[],
+    finishedBefore: Date,
+    gracePeriodHours = 12
+  ): Promise<{ retiredMissing: number; retiredFinished: number }> {
+    const empty = { retiredMissing: 0, retiredFinished: 0 };
+    if (this.dryRun) return empty;
+
+    // 1) Terminados. No depende de lo que haya devuelto la fuente.
+    const { data: finished, error: finErr } = await this.client
+      .from('events')
+      .update({ is_active: false })
+      .eq('source', source)
+      .eq('is_active', true)
+      .lt('ends_at', finishedBefore.toISOString())
+      .select('id');
+    if (finErr) throw finErr;
+
+    // 2) Desaparecidos que aún no han empezado. Se consulta primero y se
+    // filtran en memoria: el conjunto de ids vistos puede tener miles.
+    const graceStart = new Date(
+      finishedBefore.getTime() - gracePeriodHours * 3_600_000
+    ).toISOString();
+
+    const { data: candidates, error: candErr } = await this.client
+      .from('events')
+      .select('id, source_event_id, starts_at')
+      .eq('source', source)
+      .eq('is_active', true)
+      .gte('starts_at', graceStart)
+      .lt('starts_at', finishedBefore.toISOString());
+    if (candErr) throw candErr;
+
+    const seen = new Set(seenSourceEventIds);
+    const vanished = (candidates ?? []).filter(
+      (row) => !seen.has(String(row['source_event_id'] ?? ''))
+    );
+
+    let retiredMissing = 0;
+    if (vanished.length > 0) {
+      const { error, data } = await this.client
+        .from('events')
+        .update({ is_active: false })
+        .in(
+          'id',
+          vanished.map((row) => row['id'] as string)
+        )
+        .eq('is_active', true)
+        .select('id');
+      if (error) throw error;
+      retiredMissing = data?.length ?? 0;
+    }
+
+    return {
+      retiredMissing,
+      retiredFinished: finished?.length ?? 0,
+    };
+  }
+
+  /**
    * Fase 2 de la ingesta: resolver entidades duplicadas.
    *
    * Busca también en la BD las filas con la MISMA huella que llegaron en

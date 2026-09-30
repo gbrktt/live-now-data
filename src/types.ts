@@ -9,7 +9,18 @@
 export type SourceCode = 'ticketmaster' | 'bcn_open' | 'demo';
 
 /** Géneros canónicos actuales de la app (ver src/constants/filters.ts). */
-export type AppGenre = 'jazz' | 'rock' | 'indie' | 'electronic' | 'pop';
+/**
+ * Géneros canónicos de la app (ver src/constants/filters.ts).
+ * `classical` se añadió el 2026-09-30 junto con la agenda municipal de
+ * Barcelona, que clasifica el 40 % de sus conciertos como música clásica.
+ */
+export type AppGenre =
+  | 'jazz'
+  | 'rock'
+  | 'indie'
+  | 'electronic'
+  | 'pop'
+  | 'classical';
 
 export interface CanonicalVenue {
   source: SourceCode;
@@ -94,6 +105,10 @@ export interface IngestStats {
   duplicatesHidden?: number;
   /** Aliases en cola de revisión: registrados pero NO ocultados (C2). */
   duplicatesForReview?: number;
+  /** B6 · eventos ya terminados que se han retirado. */
+  retiredFinished?: number;
+  /** B6 · eventos que la fuente ya no devuelve y se han retirado. */
+  retiredMissing?: number;
 }
 
 export type IngestResultStatus =
@@ -151,4 +166,14 @@ export interface IngestWriter {
   reconcileDuplicates?(
     candidates: DedupeCandidateRow[]
   ): Promise<DedupeReconcileResult>;
+
+  /**
+   * B6 · higiene: retira (`is_active = false`) los eventos de esta fuente que
+   * la corrida NO ha visto y que ya han terminado. Nunca borra filas.
+   */
+  retireStale?(
+    source: string,
+    seenSourceEventIds: string[],
+    finishedBefore: Date
+  ): Promise<{ retiredMissing: number; retiredFinished: number }>;
 }

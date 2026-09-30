@@ -186,6 +186,29 @@ export async function runIngest(
   // duplicados aún no existirían y pasarían inadvertidos.
   await writer.flush?.();
 
+  // B6 · higiene: retira lo ya terminado y lo que la fuente ya no devuelve.
+  // Va DESPUÉS de escribir los eventos de la corrida (para no retirarlos) y
+  // con la lista de ids vistos, que es lo que distingue "desaparecido" de
+  // "acaba de llegar".
+  if (writer.retireStale) {
+    try {
+      const seen = dedupeCandidates.map((c) => c.sourceEventId);
+      const retired = await writer.retireStale(source, seen, new Date());
+      stats.retiredFinished = retired.retiredFinished;
+      stats.retiredMissing = retired.retiredMissing;
+      if (retired.retiredFinished > 0 || retired.retiredMissing > 0) {
+        console.log(
+          `[ingest] source=${source} higiene: ` +
+            `${retired.retiredFinished} terminados, ` +
+            `${retired.retiredMissing} desaparecidos`
+        );
+      }
+    } catch (error) {
+      // La ingesta ya está escrita: la higiene no debe abortarla.
+      console.error('[ingest] retireStale falló', error);
+    }
+  }
+
   // Fase 2 (C2): resolver duplicados con TODO lo que se acaba de escribir más
   // lo que ya había en la BD con la misma huella. Opcional en el contrato: los
   // dobles de test no lo implementan.

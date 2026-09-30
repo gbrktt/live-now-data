@@ -65,6 +65,17 @@ describe('mapGenre', () => {
     assert.equal(mapGenre(undefined, 'Pop'), 'pop');
   });
 
+  it('mapea la música clásica (género añadido el 2026-09-30)', () => {
+    // Antes estos títulos devolvían null y quedaban invisibles al filtrar.
+    assert.equal(mapGenre('Classical', 'Classical/Vocal'), 'classical');
+    assert.equal(mapGenre('Classical', undefined), 'classical');
+    assert.equal(mapGenre(undefined, 'Opera'), 'classical');
+    assert.equal(mapGenre(undefined, 'Coral'), 'classical');
+    // Por keyword, sin coincidencia exacta.
+    assert.equal(mapGenre('undefined', 'Concert de música clàssica'), 'classical');
+    assert.equal(mapGenre('undefined', 'Òpera de Verdi'), 'classical');
+  });
+
   it('devuelve null para géneros desconocidos', () => {
     assert.equal(mapGenre('Comedy', null), null);
     assert.equal(mapGenre(null, null), null);

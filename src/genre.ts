@@ -18,6 +18,7 @@ const APP_GENRES: readonly AppGenre[] = [
   'indie',
   'electronic',
   'pop',
+  'classical',
 ];
 
 /** Mapa exacto por nombre normalizado (ver normalizeName). */
@@ -57,6 +58,18 @@ const EXACT: Record<string, AppGenre> = {
   funk: 'jazz',
   'r b': 'jazz',
   'rhythm blues': 'jazz',
+  // Música clásica: `Classical` de Ticketmaster quedaba sin mapear y quedaba
+  // invisible al filtrar. La app ya tiene el género (añadido 2026-09-30).
+  classical: 'classical',
+  'classical music': 'classical',
+  'musica clasica': 'classical',
+  'música clásica': 'classical',
+  opera: 'classical',
+  'òpera': 'classical',
+  oratorio: 'classical',
+  choral: 'classical',
+  chamber: 'classical',
+  symphony: 'classical',
   'latin': 'pop',
   'latin pop': 'pop',
   'reggaeton': 'pop',
@@ -109,6 +122,9 @@ const KEYWORD_RULES: ReadonlyArray<[RegExp, AppGenre]> = [
   [/metal|punk|grunge|rock/i, 'rock'],
   [/indie|alternative|shoegaze|dream.?pop/i, 'indie'],
   [/electronic|edm|techno|house|trance|dubstep|electro|synth/i, 'electronic'],
+  // Antes de la regla de `pop`, que se comería "música clásica" y "ópera".
+  // `[òo]` cubre "Òpera" y "ópera"; la fuente escribe las dos formas.
+  [/cl[àa]ssic|choral|coral|oratori|liturgi|[òo]pera|sinfon|cuartet|quintet/i, 'classical'],
   [/pop|country|folk|latin|reggaeton|urbano|tropical|flamenco|world|salsa|merengue|bachata|cumbia/i, 'pop'],
 ];
 
