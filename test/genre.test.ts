@@ -34,6 +34,37 @@ describe('mapGenre', () => {
     assert.equal(mapGenre('Latin', 'Urbano'), 'pop');
   });
 
+  it('mapea flamenco y mundo a pop (datos reales ES 2026-09-30)', () => {
+    // 27 de los 43 eventos ES de 7 días venían como `World / Flamenco` y
+    // caían a null: invisibles al filtrar por género.
+    assert.equal(mapGenre('World', 'Flamenco'), 'pop');
+    assert.equal(mapGenre('World', 'World'), 'pop');
+    assert.equal(mapGenre('World Music', undefined), 'pop');
+    assert.equal(mapGenre('Folk', 'Flamenco Fusion'), 'pop');
+    assert.equal(mapGenre('Latin', 'Salsa'), 'pop');
+  });
+
+  // El sesgo histórico (78 % `pop`) venía de que `subGenre` ganaba siempre:
+  // `Rock / Pop` (10 de 43 eventos) se etiquetaba pop. Ahora manda el género.
+  it('el subgénero amplio "pop" cede ante el género declarado', () => {
+    assert.equal(mapGenre('Rock', 'Pop'), 'rock');
+    assert.equal(mapGenre('Jazz', 'Pop'), 'jazz');
+    assert.equal(mapGenre('Electronic', 'Pop'), 'electronic');
+    assert.equal(mapGenre('Indie & Alternative', 'Pop'), 'indie');
+  });
+
+  it('mantiene la prioridad del subgénero cuando es específico', () => {
+    assert.equal(mapGenre('Rock', 'Smooth Jazz'), 'jazz');
+    assert.equal(mapGenre('EDM/Electronic', 'Techno'), 'electronic');
+    assert.equal(mapGenre('Rock', 'Hard Rock'), 'rock');
+  });
+
+  it('un género pop sin subgénero sigue siendo pop', () => {
+    assert.equal(mapGenre('Pop', null), 'pop');
+    assert.equal(mapGenre('Pop', undefined), 'pop');
+    assert.equal(mapGenre(undefined, 'Pop'), 'pop');
+  });
+
   it('devuelve null para géneros desconocidos', () => {
     assert.equal(mapGenre('Comedy', null), null);
     assert.equal(mapGenre(null, null), null);

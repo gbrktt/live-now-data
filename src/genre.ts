@@ -3,9 +3,11 @@
  *
  * La app expone 5 géneros (jazz, rock, indie, electronic, pop). Ticketmaster
  * usa una taxonomía amplia por `classifications[].genre.name` / `subGenre.name`.
- * Prioridad: coincidencia exacta (subgénero → género) → reglas por keyword.
- * Si no hay coincidencia → null (la app ya trata genre=null sin romper nada)
- * y se registra en `genre_mappings` para mapeado posterior sin cambiar código.
+ * Prioridad: coincidencia exacta (subgénero específico → género declarado) →
+ * reglas por keyword. Un subgénero demasiado amplio (`pop`) cede ante el
+ * género. Si no hay coincidencia → null (la app ya trata genre=null sin
+ * romper nada) y el writer registra el par en `genre_mappings` con
+ * `app_genre=null` para poder mapearlo después sin cambiar código.
  */
 
 import type { AppGenre } from './types.ts';
@@ -61,6 +63,20 @@ const EXACT: Record<string, AppGenre> = {
   'urbano': 'pop',
   'tropical': 'pop',
   'regional mexican': 'pop',
+  // Mundo y folclore. El género `World` de Ticketmaster agrupa el flamenco y
+  // la música tradicional, que en la taxonomía de la app entran como `pop`
+  // (mismo criterio que `latin`/`reggaeton`). Sin estas entradas, el 63 % del
+  // catálogo ES de 7 días (27 de 43 eventos, `World / Flamenco`) quedaba con
+  // `genre = null` y por tanto invisible al filtrar por género.
+  flamenco: 'pop',
+  world: 'pop',
+  'world music': 'pop',
+  folklorico: 'pop',
+  folklore: 'pop',
+  salsa: 'pop',
+  merengue: 'pop',
+  bachata: 'pop',
+  cumbia: 'pop',
   bossanova: 'jazz',
   'bossa nova': 'jazz',
   swing: 'jazz',
@@ -93,7 +109,7 @@ const KEYWORD_RULES: ReadonlyArray<[RegExp, AppGenre]> = [
   [/metal|punk|grunge|rock/i, 'rock'],
   [/indie|alternative|shoegaze|dream.?pop/i, 'indie'],
   [/electronic|edm|techno|house|trance|dubstep|electro|synth/i, 'electronic'],
-  [/pop|country|folk|latin|reggaeton|urbano|tropical/i, 'pop'],
+  [/pop|country|folk|latin|reggaeton|urbano|tropical|flamenco|world|salsa|merengue|bachata|cumbia/i, 'pop'],
 ];
 
 function normalizeName(name: string): string {
@@ -111,13 +127,33 @@ function normalizeName(name: string): string {
  * Mapea género/subgénero de una fuente al género canónico de la app.
  * Devuelve null si no hay coincidencia (género desconocido).
  */
+/**
+ * Subgéneros demasiado amplios para decidir el género de la app.
+ *
+ * `Rock / Pop` (10 de los 43 eventos ES de 7 días) llegaba como `pop` y
+ * hundía el catálogo: el histórico tenía el 78 % etiquetado `pop`. Cuando el
+ * subgénero es uno de estos, decide el `genre` declarado por la fuente, que es
+ * el dato más específico. Los subgéneros reales (`Smooth Jazz`, `Techno`,
+ * `Vocal Jazz`…) conservan la prioridad sobre el género.
+ */
+const BROAD_SUBGENRES: ReadonlySet<string> = new Set([
+  'pop',
+  'other',
+  'misc',
+  'miscellaneous',
+]);
+
 export function mapGenre(
   genreName: string | null | undefined,
   subGenreName: string | null | undefined
 ): AppGenre | null {
-  for (const name of [subGenreName, genreName]) {
-    if (!name) continue;
-    const exact = EXACT[normalizeName(name)];
+  const genreKey = genreName ? normalizeName(genreName) : '';
+  const subGenreKey = subGenreName ? normalizeName(subGenreName) : '';
+
+  // 1) Subgénero específico  2) género declarado (gana al subgénero amplio).
+  for (const key of [subGenreKey, genreKey]) {
+    if (!key || BROAD_SUBGENRES.has(key)) continue;
+    const exact = EXACT[key];
     if (exact) return exact;
   }
 

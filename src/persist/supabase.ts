@@ -26,6 +26,8 @@ export class SupabaseWriter implements IngestWriter {
   private readonly client: SupabaseClient;
   private readonly now: Date;
   private readonly venueIdCache = new Map<string, string>();
+  /** Pares (genre, subGenre) ya registrados como no mapeados en esta corrida. */
+  private readonly registeredGenreKeys = new Set<string>();
 
   constructor(opts: SupabaseWriterOptions) {
     this.dryRun = opts.dryRun ?? false;
@@ -72,6 +74,51 @@ export class SupabaseWriter implements IngestWriter {
     return id;
   }
 
+  /**
+   * Registra en `genre_mappings` los `(genre, subGenre)` que el mapa de
+   * `src/genre.ts` no reconoce, con `app_genre = null`. Así el diagnóstico
+   * `select provider_genre, provider_subgenre from genre_mappings
+   * where app_genre is null` dice exactamente qué falta por mapear, sin
+   * necesidad de un despliegue.
+   *
+   * · `ignoreDuplicates`: solo inserta pares que faltan. Un mapeo ya decidido
+   *   a mano NUNCA se sobrescribe con `null` (el `mapGenre` es por código, no
+   *   lee la tabla, así que podría volver a proponer un par ya resuelto).
+   * · Un registro por par y por corrida: 27 eventos `World / Flamenco` son
+   *   una sola escritura, no 27.
+   */
+  private async registerUnmappedGenre(event: CanonicalEvent): Promise<void> {
+    if (this.dryRun) return;
+
+    const meta = event.metadata;
+    const providerGenre =
+      typeof meta?.['providerGenre'] === 'string' ? meta['providerGenre'] : '';
+    const providerSubGenre =
+      typeof meta?.['providerSubGenre'] === 'string' ? meta['providerSubGenre'] : '';
+    // Sin nombre de proveedor no hay nada que mapear después.
+    if (!providerGenre && !providerSubGenre) return;
+
+    const key = `${event.source}|${providerGenre}|${providerSubGenre}`;
+    if (this.registeredGenreKeys.has(key)) return;
+    this.registeredGenreKeys.add(key);
+
+    const { error } = await this.client
+      .from('genre_mappings')
+      .upsert(
+        {
+          source: event.source,
+          provider_genre: providerGenre,
+          provider_subgenre: providerSubGenre,
+          app_genre: null,
+        },
+        {
+          onConflict: 'source,provider_genre,provider_subgenre',
+          ignoreDuplicates: true,
+        }
+      );
+    if (error) throw error;
+  }
+
   async upsertEventWithInstances(
     event: CanonicalEvent,
     venueId: string
@@ -113,6 +160,12 @@ export class SupabaseWriter implements IngestWriter {
       if (evErr) throw evErr;
     }
     eventsUpserted += 1;
+
+    // Género que `mapGenre` no reconoce: se registra para poder mapearlo luego
+    // sin desplegar código (bucle de mejora).
+    if (event.genre === null) {
+      await this.registerUnmappedGenre(event);
+    }
 
     if (!this.dryRun && event.occurrences.length > 0) {
       const rows = [];
