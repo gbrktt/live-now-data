@@ -13,6 +13,7 @@
  */
 
 import { mapGenre } from '../genre.ts';
+import { genreFromTitle } from './bcn-genre.ts';
 import { deterministicUuid } from '../utils/uuid.ts';
 import type {
   CanonicalEvent,
@@ -122,8 +123,10 @@ export class BcnOpenNormalizer implements Normalizer<Record<string, string>> {
       externalUrl: urlIfPresent(value['values_value']),
     };
 
-    // El género se deduce del título, no de una taxonomía (el CSV no la trae).
-    const genre = mapGenre(title, null);
+    // Género: primero el título (que a veces sí lo delata), después la tabla
+    // de taxonomía municipal embebida (src/normalize/bcn-genre.ts). El CSV no
+    // trae las categorías, así que sin esto el 95 % quedaba en null.
+    const genre = mapGenre(title, null) ?? genreFromTitle(title);
 
     const description = cleanDescription(
       timetableToText(value['timetable'])
