@@ -6,7 +6,7 @@
  * solo conocen este modelo: añadir una fuente nueva = nuevo adapter + normalizer.
  */
 
-export type SourceCode = 'ticketmaster' | 'demo';
+export type SourceCode = 'ticketmaster' | 'bcn_open' | 'demo';
 
 /** Géneros canónicos actuales de la app (ver src/constants/filters.ts). */
 export type AppGenre = 'jazz' | 'rock' | 'indie' | 'electronic' | 'pop';
@@ -73,8 +73,12 @@ export interface EventSourceAdapter {
 }
 
 export interface Normalizer<R = unknown> {
-  /** Devuelve null si el evento no es normalizable (venue sin coords, etc.). */
-  toCanonical(raw: R): CanonicalEvent | null;
+  /**
+   * Devuelve null si el evento no es normalizable (venue sin coords, etc.).
+   * Puede ser asíncrono: la agenda municipal deriva el `venue_id` de la
+   * dirección, que requiere un hash.
+   */
+  toCanonical(raw: R): CanonicalEvent | null | Promise<CanonicalEvent | null>;
 }
 
 export interface IngestStats {
@@ -133,6 +137,13 @@ export interface IngestWriter {
     event: CanonicalEvent,
     venueId: string
   ): Promise<{ eventId: string; eventsUpserted: number; instancesUpserted: number }>;
+  /**
+   * Vuelca los lotes pendientes. Obligatorio antes de cualquier fase que lea
+   * de la BD (el dedupe), o los últimos eventos de la corrida no existirían
+   * todavía y sus duplicados pasarían inadvertidos.
+   */
+  flush?(): Promise<void>;
+
   /**
    * Fase 2 de la ingesta: resolver entidades duplicadas. Opcional para no
    * obligar a los dobles de test a implementarlo.

@@ -52,6 +52,10 @@ export interface DataConfig {
   countryCode: string;
   /** Fuerza el modo de barrido; si no, cada tier usa el suyo. */
   scopeMode?: ScopeMode;
+  /** URL del CSV de la agenda cultural de Barcelona (fuente `bcn_open`). */
+  bcnOpenUrl?: string;
+  /** Deja la fuente municipal apagada sin tocar el código. */
+  bcnOpenEnabled?: boolean;
 }
 
 export function parseConfig(
@@ -92,6 +96,8 @@ export function parseConfig(
     dailyQuota: Number.isFinite(dailyQuota) && dailyQuota > 0 ? dailyQuota : 4000,
     countryCode: env['COUNTRY_CODE'] ?? 'ES',
     scopeMode: parseScopeMode(env['SCOPE_MODE']),
+    bcnOpenUrl: env['BCN_OPEN_URL'],
+    bcnOpenEnabled: env['BCN_OPEN_ENABLED'] !== 'false',
   };
 }
 

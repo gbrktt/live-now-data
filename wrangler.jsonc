@@ -15,6 +15,9 @@
     "ENV": "production",
     "CITIES": "madrid|40.4168,-3.7038|50;barcelona|41.3874,2.1686|50;valencia|39.4699,-0.3763|40;sevilla|37.3891,-5.9845|40;bilbao|43.2630,-2.9350|35",
     "LOOKAHEAD_DAYS": "63",
-    "DAILY_QUOTA": "4000"
+    "DAILY_QUOTA": "4000",
+    // C1 · segunda fuente: agenda cultural municipal de Barcelona.
+    // Apagable sin desplegar con BCN_OPEN_ENABLED=false.
+    "BCN_OPEN_ENABLED": "true"
   }
 }

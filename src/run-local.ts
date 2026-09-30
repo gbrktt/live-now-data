@@ -20,12 +20,15 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { BcnOpenAdapter } from './adapters/bcn-open.ts';
 import { TicketmasterAdapter } from './adapters/ticketmaster.ts';
-import { fromToForTier, parseConfig, TIERS, type Tier } from './config.ts';
+import { fromToForTier, parseConfig, scopeModeForTier, TIERS, type Tier } from './config.ts';
 import { TicketmasterNormalizer } from './normalize/ticketmaster.ts';
+import { BcnOpenNormalizer } from './normalize/bcn-open.ts';
 import { runIngest } from './orchestrator.ts';
 import { SupabaseWriter } from './persist/supabase.ts';
 import { parseScopeMode, type CityScopeConfig, type ScopeMode } from './scopes.ts';
+import type { IngestScope, SourceCode } from './types.ts';
 
 function loadDevVars(): Record<string, string> {
   try {
@@ -56,12 +59,19 @@ function getArg(name: string): string | undefined {
   return index !== -1 ? process.argv[index + 1] : undefined;
 }
 
+function parseSource(value: string | undefined): SourceCode {
+  const v = (value ?? '').trim().toLowerCase();
+  if (v === 'bcn_open' || v === 'bcn' || v === 'bcnopen') return 'bcn_open';
+  return 'ticketmaster';
+}
+
 function parseFlags(argv: string[]): {
   dryRun: boolean;
   tier: Tier;
   scopeLimit: number;
   citiesArg: string | null;
   scopeMode: ScopeMode | undefined;
+  source: SourceCode;
 } {
   return {
     dryRun: argv.includes('--dry-run'),
@@ -69,6 +79,7 @@ function parseFlags(argv: string[]): {
     scopeLimit: Number(getArg('--scope-limit') ?? 0),
     citiesArg: getArg('--cities') ?? null,
     scopeMode: parseScopeMode(getArg('--scope-mode')),
+    source: parseSource(getArg('--source')),
   };
 }
 
@@ -118,26 +129,50 @@ async function main(): Promise<void> {
     serviceRoleKey: config.supabaseServiceRoleKey,
     dryRun: flags.dryRun,
   });
-  const adapter = new TicketmasterAdapter({ apiKey: config.ticketmasterApiKey });
-  const normalizer = new TicketmasterNormalizer();
+
+  // Cada fuente trae su adapter + normalizer. El resto (orquestador, writer,
+  // dedupe) es idéntico: añadir una fuente NO toca la base de datos ni la app.
+  const isBcn = flags.source === 'bcn_open';
+  const adapter = isBcn
+    ? new BcnOpenAdapter({ url: config.bcnOpenUrl })
+    : new TicketmasterAdapter({ apiKey: config.ticketmasterApiKey });
+  const normalizer = isBcn
+    ? new BcnOpenNormalizer()
+    : new TicketmasterNormalizer();
+
+  // La agenda municipal no se particiona por ciudad: devuelve el fichero
+  // entero y el adaptador filtra por la ventana del scope.
+  const scopes: IngestScope[] | undefined = isBcn
+    ? [
+        {
+          key: `bcn-open-${from.toISOString()}--${to.toISOString()}`,
+          source: flags.source,
+          params: { from: from.toISOString(), to: to.toISOString() },
+        },
+      ]
+    : undefined;
 
   console.log(
-    `[live-now-data] tier=${flags.tier} dryRun=${flags.dryRun} ` +
-      `from=${from.toISOString()} to=${to.toISOString()}`
+    `[live-now-data] source=${flags.source} tier=${flags.tier} ` +
+      `dryRun=${flags.dryRun} from=${from.toISOString()} to=${to.toISOString()}`
   );
-  const scopeMode = flags.scopeMode ?? config.scopeMode ?? TIERS[flags.tier].scopeMode;
-  console.log(
-    `[live-now-data] scopeMode=${scopeMode}` +
-      (scopeMode === 'country'
-        ? ` país=${config.countryCode} (sin geo)`
-        : ` ciudades: ${effectiveCities
-            .map((c) => `${c.city}@${c.radiusKm}km`)
-            .join(', ')}`)
-  );
+  const scopeMode = flags.scopeMode ?? config.scopeMode ?? scopeModeForTier(flags.tier, config.scopeMode);
+  if (!isBcn) {
+    console.log(
+      `[live-now-data] scopeMode=${scopeMode}` +
+        (scopeMode === 'country'
+          ? ` país=${config.countryCode} (sin geo)`
+          : ` ciudades: ${effectiveCities
+              .map((c) => `${c.city}@${c.radiusKm}km`)
+              .join(', ')}`)
+    );
+  } else {
+    console.log('[live-now-data] fuente municipal: un único scope por ventana');
+  }
   console.log(`[live-now-data] cuota diaria=${config.dailyQuota}`);
 
   const result = await runIngest({
-    source: 'ticketmaster',
+    source: flags.source,
     adapter,
     normalizer,
     writer,
@@ -146,6 +181,7 @@ async function main(): Promise<void> {
     cities: effectiveCities,
     countryCode: config.countryCode,
     scopeMode,
+    scopes,
     windowDays: TIERS[flags.tier].windowDays,
     dailyQuota: config.dailyQuota,
     maxScopes: flags.scopeLimit,
