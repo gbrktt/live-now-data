@@ -6,10 +6,21 @@
  * solo conocen este modelo: añadir una fuente nueva = nuevo adapter + normalizer.
  */
 
-export type SourceCode = 'ticketmaster' | 'demo';
+export type SourceCode = 'ticketmaster' | 'bcn_open' | 'demo';
 
 /** Géneros canónicos actuales de la app (ver src/constants/filters.ts). */
-export type AppGenre = 'jazz' | 'rock' | 'indie' | 'electronic' | 'pop';
+/**
+ * Géneros canónicos de la app (ver src/constants/filters.ts).
+ * `classical` se añadió el 2026-09-30 junto con la agenda municipal de
+ * Barcelona, que clasifica el 40 % de sus conciertos como música clásica.
+ */
+export type AppGenre =
+  | 'jazz'
+  | 'rock'
+  | 'indie'
+  | 'electronic'
+  | 'pop'
+  | 'classical';
 
 export interface CanonicalVenue {
   source: SourceCode;
@@ -73,8 +84,12 @@ export interface EventSourceAdapter {
 }
 
 export interface Normalizer<R = unknown> {
-  /** Devuelve null si el evento no es normalizable (venue sin coords, etc.). */
-  toCanonical(raw: R): CanonicalEvent | null;
+  /**
+   * Devuelve null si el evento no es normalizable (venue sin coords, etc.).
+   * Puede ser asíncrono: la agenda municipal deriva el `venue_id` de la
+   * dirección, que requiere un hash.
+   */
+  toCanonical(raw: R): CanonicalEvent | null | Promise<CanonicalEvent | null>;
 }
 
 export interface IngestStats {
@@ -84,6 +99,16 @@ export interface IngestStats {
   eventsUpserted: number;
   instancesUpserted: number;
   skippedInvalid: number;
+  /** Aliases escritos en `event_aliases` (C2). */
+  aliasesWritten?: number;
+  /** Perdedores ocultados por fusión automática (C2). */
+  duplicatesHidden?: number;
+  /** Aliases en cola de revisión: registrados pero NO ocultados (C2). */
+  duplicatesForReview?: number;
+  /** B6 · eventos ya terminados que se han retirado. */
+  retiredFinished?: number;
+  /** B6 · eventos que la fuente ya no devuelve y se han retirado. */
+  retiredMissing?: number;
 }
 
 export type IngestResultStatus =
@@ -99,6 +124,26 @@ export interface IngestResult {
   lastScope: string | null;
 }
 
+/** Fila mínima que el writer necesita para decidir una fusión (ver ingest/dedupe.ts). */
+export interface DedupeCandidateRow {
+  source: SourceCode;
+  sourceEventId: string;
+  eventId: string;
+  title: string;
+  dedupeKey: string;
+  venueNameKey: string;
+  isActive: boolean;
+}
+
+export interface DedupeReconcileResult {
+  /** Aliases escritos en `event_aliases`. */
+  aliases: number;
+  /** Perdedores ocultados (`is_active = false` + `merged_into`). */
+  hidden: number;
+  /** Aliases de la cola de revisión (registrados, NO ocultados). */
+  reviewOnly: number;
+}
+
 /** Contrato de persistencia (idempotente). dryRun = no escribe. */
 export interface IngestWriter {
   readonly dryRun: boolean;
@@ -106,5 +151,29 @@ export interface IngestWriter {
   upsertEventWithInstances(
     event: CanonicalEvent,
     venueId: string
-  ): Promise<{ eventsUpserted: number; instancesUpserted: number }>;
+  ): Promise<{ eventId: string; eventsUpserted: number; instancesUpserted: number }>;
+  /**
+   * Vuelca los lotes pendientes. Obligatorio antes de cualquier fase que lea
+   * de la BD (el dedupe), o los últimos eventos de la corrida no existirían
+   * todavía y sus duplicados pasarían inadvertidos.
+   */
+  flush?(): Promise<void>;
+
+  /**
+   * Fase 2 de la ingesta: resolver entidades duplicadas. Opcional para no
+   * obligar a los dobles de test a implementarlo.
+   */
+  reconcileDuplicates?(
+    candidates: DedupeCandidateRow[]
+  ): Promise<DedupeReconcileResult>;
+
+  /**
+   * B6 · higiene: retira (`is_active = false`) los eventos de esta fuente que
+   * la corrida NO ha visto y que ya han terminado. Nunca borra filas.
+   */
+  retireStale?(
+    source: string,
+    seenSourceEventIds: string[],
+    finishedBefore: Date
+  ): Promise<{ retiredMissing: number; retiredFinished: number }>;
 }

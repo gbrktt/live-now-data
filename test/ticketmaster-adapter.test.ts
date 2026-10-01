@@ -67,6 +67,46 @@ describe('TicketmasterAdapter.fetchScopeBatch', () => {
     assert.ok(!capturedUrl.includes('source=ticketmaster'));
   });
 
+  // B1 (2026-09-30): el barrido por PAÍS (scope sin `latlong`) sí necesita
+  // `countryCode`; es el modo que multiplica la cobertura (353 vs 86 eventos).
+  // La combinación geo+country que lo anula solo aplica cuando hay radio.
+  it('envía countryCode en el scope de país (sin latlong)', async () => {
+    let capturedUrl = '';
+    const adapter = new TicketmasterAdapter({
+      apiKey: 'test-key',
+      fetchFn: (async (url: string) => {
+        capturedUrl = url;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            _embedded: { events: [] },
+            page: { size: 200, number: 0, totalElements: 0, totalPages: 0 },
+          }),
+        } as unknown as Response;
+      }) as typeof fetch,
+    });
+
+    await adapter.fetchScopeBatch(
+      {
+        key: 'ES-2026-09-30--2026-10-10',
+        source: 'ticketmaster',
+        params: {
+          countryCode: 'ES',
+          startDateTime: '2026-09-30T00:00:00.000Z',
+          endDateTime: '2026-10-10T00:00:00.000Z',
+        },
+      },
+      0
+    );
+
+    assert.ok(capturedUrl.includes('countryCode=ES'));
+    assert.ok(capturedUrl.includes('classificationName=Music'));
+    assert.ok(!capturedUrl.includes('latlong='));
+    assert.ok(!capturedUrl.includes('radius='));
+    assert.ok(!capturedUrl.includes('source=ticketmaster'));
+  });
+
   // Regresión (2026-09-22): en workerd, `this.fetchFn(...)` vinculaba la
   // instancia como `this` del fetch global → "Illegal invocation" en /run y
   // en los crons. La llamada debe ser desnuda (this = undefined).
