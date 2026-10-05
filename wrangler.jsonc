@@ -18,6 +18,10 @@
     "DAILY_QUOTA": "4000",
     // C1 · segunda fuente: agenda cultural municipal de Barcelona.
     // Apagable sin desplegar con BCN_OPEN_ENABLED=false.
-    "BCN_OPEN_ENABLED": "true"
+    "BCN_OPEN_ENABLED": "true",
+    // C2 · tercera fuente: agenda cultural municipal de Madrid (datos.madrid.es,
+    // mismo patrón que BCN: un scope por ventana en T2/T3, sin T1).
+    // Apagable sin desplegar con MADRID_OPEN_ENABLED=false.
+    "MADRID_OPEN_ENABLED": "true"
   }
 }

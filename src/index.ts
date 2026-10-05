@@ -8,6 +8,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { Hono } from 'hono';
 import { BcnOpenAdapter } from './adapters/bcn-open.ts';
+import { MadridOpenAdapter } from './adapters/madrid-open.ts';
 import { TicketmasterAdapter } from './adapters/ticketmaster.ts';
 import {
   fromToForTier,
@@ -18,10 +19,17 @@ import {
   type Tier,
 } from './config.ts';
 import { BcnOpenNormalizer } from './normalize/bcn-open.ts';
+import { MadridOpenNormalizer } from './normalize/madrid-open.ts';
 import { TicketmasterNormalizer } from './normalize/ticketmaster.ts';
 import { runIngest } from './orchestrator.ts';
 import { SupabaseWriter } from './persist/supabase.ts';
-import type { IngestResult, IngestScope, SourceCode } from './types.ts';
+import type {
+  EventSourceAdapter,
+  IngestResult,
+  IngestScope,
+  Normalizer,
+  SourceCode,
+} from './types.ts';
 
 export interface Env {
   TICKETMASTER_API_KEY: string;
@@ -38,6 +46,10 @@ export interface Env {
   COUNTRY_CODE?: string;
   /** Fuerza el modo de barrido (`city`/`country`/`hybrid`) en todos los tiers. */
   SCOPE_MODE?: string;
+  /** URL override del CSV de Madrid (por defecto, la de datos.madrid.es). */
+  MADRID_OPEN_URL?: string;
+  /** `false` apaga la agenda de Madrid sin desplegar. */
+  MADRID_OPEN_ENABLED?: string;
   // Index signature para poder pasar Env a parseConfig (Record<string, string|undefined>).
   [key: string]: string | undefined;
 }
@@ -67,10 +79,12 @@ function describeError(error: unknown): string {
 
 const SOURCE = 'ticketmaster' as const;
 const SOURCE_BCN = 'bcn_open' as const;
+const SOURCE_MADRID = 'madrid_open' as const;
 
 const SOURCE_NAMES: Record<string, string> = {
   ticketmaster: 'Ticketmaster Discovery API',
   bcn_open: 'Agenda Cultural de Barcelona (datos abiertos)',
+  madrid_open: 'Agenda cultural de Madrid (datos abiertos)',
 };
 
 function createSupabase(env: Env) {
@@ -105,19 +119,26 @@ async function runOnce(
 
   // Cada fuente trae su adapter + normalizer. Orquestador, writer y dedupe son
   // los mismos: añadir una fuente NO toca la base de datos ni la app.
-  const isBcn = source === SOURCE_BCN;
-  const adapter = isBcn
-    ? new BcnOpenAdapter({ url: config.bcnOpenUrl })
-    : new TicketmasterAdapter({ apiKey: config.ticketmasterApiKey });
-  const normalizer = isBcn
-    ? new BcnOpenNormalizer()
-    : new TicketmasterNormalizer();
+  const isMunicipal = source === SOURCE_BCN || source === SOURCE_MADRID;
+  let adapter: EventSourceAdapter;
+  let normalizer: Normalizer<unknown>;
+  if (source === SOURCE_BCN) {
+    adapter = new BcnOpenAdapter({ url: config.bcnOpenUrl });
+    normalizer = new BcnOpenNormalizer();
+  } else if (source === SOURCE_MADRID) {
+    adapter = new MadridOpenAdapter({ url: config.madridOpenUrl });
+    normalizer = new MadridOpenNormalizer();
+  } else {
+    adapter = new TicketmasterAdapter({ apiKey: config.ticketmasterApiKey });
+    normalizer = new TicketmasterNormalizer();
+  }
 
-  // La agenda municipal no se particiona por ciudad: un único scope por ventana.
-  const scopes: IngestScope[] | undefined = isBcn
+  // Las agendas municipales no se particionan por ciudad: un único scope por
+  // ventana (el adaptador filtra el fichero entero).
+  const scopes: IngestScope[] | undefined = isMunicipal
     ? [
         {
-          key: `bcn-open-${from.toISOString()}--${to.toISOString()}`,
+          key: `${source}-${from.toISOString()}--${to.toISOString()}`,
           source,
           params: { from: from.toISOString(), to: to.toISOString() },
         },
@@ -233,7 +254,9 @@ app.post('/run', async (c) => {
       ? (body.tier.toUpperCase() as Tier)
       : 'T1';
   const source: SourceCode =
-    body.source === SOURCE_BCN ? SOURCE_BCN : SOURCE;
+    body.source === SOURCE_BCN || body.source === SOURCE_MADRID
+      ? body.source
+      : SOURCE;
   const dryRun = body.dryRun === true;
   const startedAt = new Date();
 
@@ -303,19 +326,32 @@ async function runSourceScheduled(
  * Fuentes que corren en cada cron.
  *
  * Ticketmaster va siempre: T1 (48 h, cada 30 min) es su frescura.
- * La agenda municipal NO va en T1: son 7,8 MB por corrida y 48 corridas
- * diarias para un documento que se actualiza a diario. Con T2 (2×/día) y T3
- * (1×/día) basta, y el coste cae de ~373 MB/día a ~23 MB/día.
+ * Las agendas municipales NO van en T1: son ~9,4 MB por corrida (BCN 7,8 +
+ * Madrid 1,6) y 48 corridas diarias para documentos que se actualizan a
+ * diario. Con T2 (2×/día) y T3 (1×/día) basta (mismo criterio medido para
+ * BCN: de ~373 MB/día a ~23 MB/día; Madrid añade ~3 MB/día).
  */
-function sourcesForTier(tier: Tier, bcnEnabled: boolean): SourceCode[] {
-  if (!bcnEnabled) return [SOURCE];
-  return tier === 'T1' ? [SOURCE] : [SOURCE, SOURCE_BCN];
+function sourcesForTier(
+  tier: Tier,
+  bcnEnabled: boolean,
+  madridEnabled: boolean
+): SourceCode[] {
+  if (tier === 'T1') return [SOURCE];
+  const municipal: SourceCode[] = [];
+  if (bcnEnabled) municipal.push(SOURCE_BCN);
+  if (madridEnabled) municipal.push(SOURCE_MADRID);
+  return municipal.length === 0 ? [SOURCE] : [SOURCE, ...municipal];
 }
 
 async function executeScheduled(env: Env, cron: string): Promise<void> {
   const tier = tierFromCron(cron);
-  const bcnEnabled = parseConfig(env).bcnOpenEnabled !== false;
-  for (const source of sourcesForTier(tier, bcnEnabled)) {
+  const config = parseConfig(env);
+  const sources = sourcesForTier(
+    tier,
+    config.bcnOpenEnabled !== false,
+    config.madridOpenEnabled !== false
+  );
+  for (const source of sources) {
     await runSourceScheduled(env, tier, source);
   }
 }

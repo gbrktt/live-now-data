@@ -11,7 +11,14 @@
 
 import type { IngestScope, RawEventBatch, SourceCode, EventSourceAdapter } from '../types.ts';
 
-/** Decodifica los bytes del recurso. La fuente publica UTF-16LE. */
+/**
+ * Decodifica los bytes del recurso.
+ * Detección por orden (cada fuente publica distinto):
+ *   · BOM UTF-16LE (FF FE) → Barcelona (su CSV viene en UTF-16LE).
+ *   · UTF-8 válido → la mayoría.
+ *   · UTF-8 inválido → ISO-8859-1/windows-1252 (Madrid: Latin-1 acentuado,
+ *     verificado 2026-10-05 con `TextDecoder({fatal:true})` sobre el CSV real).
+ */
 export function decodeCsvBytes(bytes: ArrayBuffer): string {
   const view = new Uint8Array(bytes);
   // BOM UTF-16LE: FF FE. TextDecoder lo respeta, pero lo quitamos por si el
@@ -19,15 +26,27 @@ export function decodeCsvBytes(bytes: ArrayBuffer): string {
   if (view.length >= 2 && view[0] === 0xff && view[1] === 0xfe) {
     return new TextDecoder('utf-16le').decode(view.subarray(2));
   }
-  return new TextDecoder('utf-8').decode(view);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(view);
+  } catch {
+    // Sin `fatal` TextDecoder sustituye los bytes Latin-1 por U+FFFD y el id
+    // (` ID-EVENTO`) y los títulos quedarían corruptos.
+    return new TextDecoder('windows-1252').decode(view);
+  }
 }
 
 /**
  * Convierte texto CSV en filas de celdas, respetando comillas dobles y los
  * saltos de línea embebidos. `maxRows` corta pronto: la ingesta solo mira los
  * eventos de la ventana, no las 3.500 filas.
+ *
+ * `separator`: `,` (Barcelona, por defecto) o `;` (Madrid, ISO-8859-1).
  */
-export function parseCsv(text: string, maxRows = Number.POSITIVE_INFINITY): string[][] {
+export function parseCsv(
+  text: string,
+  maxRows = Number.POSITIVE_INFINITY,
+  separator = ','
+): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
@@ -72,7 +91,7 @@ export function parseCsv(text: string, maxRows = Number.POSITIVE_INFINITY): stri
       i += 1;
       continue;
     }
-    if (ch === ',') {
+    if (ch === separator) {
       endField();
       i += 1;
       continue;
@@ -98,8 +117,12 @@ export function parseCsv(text: string, maxRows = Number.POSITIVE_INFINITY): stri
 }
 
 /** Convierte filas + cabecera en objetos, descartando filas descuadradas. */
-export function toRecords(text: string, maxRows = Number.POSITIVE_INFINITY): Record<string, string>[] {
-  const rows = parseCsv(text, maxRows + 1);
+export function toRecords(
+  text: string,
+  maxRows = Number.POSITIVE_INFINITY,
+  separator = ','
+): Record<string, string>[] {
+  const rows = parseCsv(text, maxRows + 1, separator);
   if (rows.length === 0) return [];
   const header = rows[0].map((h) => h.trim());
   // El CSV de Barcelona viene en UTF-16 y su PRIMERA columna arrastra un BOM
