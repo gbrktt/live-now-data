@@ -246,18 +246,24 @@ app.post('/run', async (c) => {
 
   const body = (await c.req.json().catch(() => ({}))) as {
     tier?: string;
-    dryRun?: boolean;
+    dryRun?: boolean | string;
     source?: string;
   };
+  // Hono + workerd: en POST `c.req.query()` puede devolver `{}` aunque la URL
+  // traiga query (medido 2026-10-05: `?tier=T2&source=madrid_open` se ignoraba
+  // y corría T1/ticketmaster). La URL cruda; el cuerpo manda si la trae.
+  const rawQuery = Object.fromEntries(new URL(c.req.url).searchParams.entries());
+  const query = { ...rawQuery, ...c.req.query() };
+  const tierRaw = body.tier ?? query['tier'];
   const tier: Tier =
-    body.tier && body.tier.toUpperCase() in TIERS
-      ? (body.tier.toUpperCase() as Tier)
+    typeof tierRaw === 'string' && tierRaw.toUpperCase() in TIERS
+      ? (tierRaw.toUpperCase() as Tier)
       : 'T1';
+  const sourceRaw = body.source ?? query['source'];
   const source: SourceCode =
-    body.source === SOURCE_BCN || body.source === SOURCE_MADRID
-      ? body.source
-      : SOURCE;
-  const dryRun = body.dryRun === true;
+    sourceRaw === SOURCE_BCN || sourceRaw === SOURCE_MADRID ? sourceRaw : SOURCE;
+  const dryRunRaw = body.dryRun ?? query['dryRun'];
+  const dryRun = dryRunRaw === true || dryRunRaw === 'true' || dryRunRaw === '1';
   const startedAt = new Date();
 
   try {
