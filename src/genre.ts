@@ -62,6 +62,10 @@ const EXACT: Record<string, AppGenre> = {
   // invisible al filtrar. La app ya tiene el género (añadido 2026-09-30).
   classical: 'classical',
   'classical music': 'classical',
+  // Taxonomía municipal de Madrid: el subgénero llega en español ("Clasica"
+  // en /Musica/Clasica); sin esta entrada quedaba genre=null en el 100 % de
+  // los conciertos clásicos de la agenda (medido 2026-10-05).
+  clasica: 'classical',
   'musica clasica': 'classical',
   'música clásica': 'classical',
   opera: 'classical',

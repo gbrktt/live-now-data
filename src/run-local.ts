@@ -21,14 +21,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { BcnOpenAdapter } from './adapters/bcn-open.ts';
+import { MadridOpenAdapter } from './adapters/madrid-open.ts';
 import { TicketmasterAdapter } from './adapters/ticketmaster.ts';
 import { fromToForTier, parseConfig, scopeModeForTier, TIERS, type Tier } from './config.ts';
 import { TicketmasterNormalizer } from './normalize/ticketmaster.ts';
 import { BcnOpenNormalizer } from './normalize/bcn-open.ts';
+import { MadridOpenNormalizer } from './normalize/madrid-open.ts';
 import { runIngest } from './orchestrator.ts';
 import { SupabaseWriter } from './persist/supabase.ts';
 import { parseScopeMode, type CityScopeConfig, type ScopeMode } from './scopes.ts';
-import type { IngestScope, SourceCode } from './types.ts';
+import type { EventSourceAdapter, IngestScope, Normalizer, SourceCode } from './types.ts';
 
 function loadDevVars(): Record<string, string> {
   try {
@@ -62,6 +64,7 @@ function getArg(name: string): string | undefined {
 function parseSource(value: string | undefined): SourceCode {
   const v = (value ?? '').trim().toLowerCase();
   if (v === 'bcn_open' || v === 'bcn' || v === 'bcnopen') return 'bcn_open';
+  if (v === 'madrid_open' || v === 'madrid' || v === 'madridopen') return 'madrid_open';
   return 'ticketmaster';
 }
 
@@ -132,20 +135,26 @@ async function main(): Promise<void> {
 
   // Cada fuente trae su adapter + normalizer. El resto (orquestador, writer,
   // dedupe) es idéntico: añadir una fuente NO toca la base de datos ni la app.
-  const isBcn = flags.source === 'bcn_open';
-  const adapter = isBcn
-    ? new BcnOpenAdapter({ url: config.bcnOpenUrl })
-    : new TicketmasterAdapter({ apiKey: config.ticketmasterApiKey });
-  const normalizer = isBcn
-    ? new BcnOpenNormalizer()
-    : new TicketmasterNormalizer();
+  const isMunicipal = flags.source === 'bcn_open' || flags.source === 'madrid_open';
+  let adapter: EventSourceAdapter;
+  let normalizer: Normalizer<unknown>;
+  if (flags.source === 'bcn_open') {
+    adapter = new BcnOpenAdapter({ url: config.bcnOpenUrl });
+    normalizer = new BcnOpenNormalizer();
+  } else if (flags.source === 'madrid_open') {
+    adapter = new MadridOpenAdapter({ url: config.madridOpenUrl });
+    normalizer = new MadridOpenNormalizer();
+  } else {
+    adapter = new TicketmasterAdapter({ apiKey: config.ticketmasterApiKey });
+    normalizer = new TicketmasterNormalizer();
+  }
 
-  // La agenda municipal no se particiona por ciudad: devuelve el fichero
+  // Las agendas municipales no se particionan por ciudad: devuelven el fichero
   // entero y el adaptador filtra por la ventana del scope.
-  const scopes: IngestScope[] | undefined = isBcn
+  const scopes: IngestScope[] | undefined = isMunicipal
     ? [
         {
-          key: `bcn-open-${from.toISOString()}--${to.toISOString()}`,
+          key: `${flags.source}-${from.toISOString()}--${to.toISOString()}`,
           source: flags.source,
           params: { from: from.toISOString(), to: to.toISOString() },
         },
@@ -157,7 +166,7 @@ async function main(): Promise<void> {
       `dryRun=${flags.dryRun} from=${from.toISOString()} to=${to.toISOString()}`
   );
   const scopeMode = flags.scopeMode ?? config.scopeMode ?? scopeModeForTier(flags.tier, config.scopeMode);
-  if (!isBcn) {
+  if (!isMunicipal) {
     console.log(
       `[live-now-data] scopeMode=${scopeMode}` +
         (scopeMode === 'country'

@@ -16,6 +16,14 @@ describe('decodeCsvBytes', () => {
     const bytes = new TextEncoder().encode('id,nombre\n1,cançó\n');
     assert.equal(decodeCsvBytes(bytes.buffer), 'id,nombre\n1,cançó\n');
   });
+
+  it('decodifica ISO-8859-1/windows-1252 (el CSV de Madrid)', () => {
+    // "Título" en Latin-1: 0x54 0xED 0x74 0x75 0x6C 0x6F (í = 0xED).
+    // Sin la caída a windows-1252, TextDecoder(utf-8) pondría U+FFFD y el
+    // id/títulos quedarían corruptos (rompería la idempotencia del upsert).
+    const bytes = new Uint8Array([0x54, 0xed, 0x74, 0x75, 0x6c, 0x6f]);
+    assert.equal(decodeCsvBytes(bytes.buffer), 'Título');
+  });
 });
 
 describe('parseCsv', () => {
@@ -52,6 +60,16 @@ describe('parseCsv', () => {
   it('devuelve vacío con texto vacío', () => {
     assert.deepEqual(parseCsv(''), []);
   });
+
+  it('acepta separador ";" (el CSV de Madrid)', () => {
+    const rows = parseCsv('a;b\n"x;1";y\n', Number.POSITIVE_INFINITY, ';');
+    assert.deepEqual(rows, [
+      ['a', 'b'],
+      ['x;1', 'y'],
+    ]);
+    // Con el separador por defecto (,) no partiría por punto y coma.
+    assert.deepEqual(parseCsv('a;b\n'), [['a;b']]);
+  });
 });
 
 describe('toRecords', () => {
@@ -72,5 +90,14 @@ describe('toRecords', () => {
   it('respeta maxRows', () => {
     const text = 'a\n1\n2\n3\n4\n';
     assert.equal(toRecords(text, 2).length, 2);
+  });
+
+  it('toRecords con ";" mapea la cabecera de Madrid (con espacio inicial)', () => {
+    const text = ' ID-EVENTO;TITULO\n50430557;Concierto\n';
+    const records = toRecords(text, Number.POSITIVE_INFINITY, ';');
+    assert.equal(records.length, 1);
+    // toRecords hace trim() a la cabecera: " ID-EVENTO" → "ID-EVENTO".
+    assert.equal(records[0]['ID-EVENTO'], '50430557');
+    assert.equal(records[0]['TITULO'], 'Concierto');
   });
 });

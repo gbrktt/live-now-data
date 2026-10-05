@@ -6,7 +6,7 @@
  * solo conocen este modelo: añadir una fuente nueva = nuevo adapter + normalizer.
  */
 
-export type SourceCode = 'ticketmaster' | 'bcn_open' | 'demo';
+export type SourceCode = 'ticketmaster' | 'bcn_open' | 'madrid_open' | 'demo';
 
 /** Géneros canónicos actuales de la app (ver src/constants/filters.ts). */
 /**

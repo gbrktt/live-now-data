@@ -54,8 +54,12 @@ export interface DataConfig {
   scopeMode?: ScopeMode;
   /** URL del CSV de la agenda cultural de Barcelona (fuente `bcn_open`). */
   bcnOpenUrl?: string;
-  /** Deja la fuente municipal apagada sin tocar el código. */
+  /** Deja la fuente municipal de Barcelona apagada sin tocar el código. */
   bcnOpenEnabled?: boolean;
+  /** URL del CSV de la agenda cultural de Madrid (fuente `madrid_open`). */
+  madridOpenUrl?: string;
+  /** Deja la fuente municipal de Madrid apagada sin tocar el código. */
+  madridOpenEnabled?: boolean;
 }
 
 export function parseConfig(
@@ -98,6 +102,8 @@ export function parseConfig(
     scopeMode: parseScopeMode(env['SCOPE_MODE']),
     bcnOpenUrl: env['BCN_OPEN_URL'],
     bcnOpenEnabled: env['BCN_OPEN_ENABLED'] !== 'false',
+    madridOpenUrl: env['MADRID_OPEN_URL'],
+    madridOpenEnabled: env['MADRID_OPEN_ENABLED'] !== 'false',
   };
 }
 
