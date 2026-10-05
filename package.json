@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
-    "hono": "^4.13.9"
+    "hono": "^4.13.12"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
