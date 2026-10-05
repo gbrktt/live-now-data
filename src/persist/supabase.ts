@@ -22,6 +22,21 @@ import type {
 } from '../types.ts';
 import { deterministicUuid } from '../utils/uuid.ts';
 
+/**
+ * Elimina filas con el mismo `id` dentro del lote, quedándose con la última.
+ *
+ * Por qué existe: la misma fuente puede devolver el mismo evento dos veces en
+ * una corrida (Ticketmaster repite el mismo `id` en ciudad y en país, y los
+ * CSV municipales traen filas bilingües con distinto `ID-EVENTO` pero mismo
+ * `sourceInstanceId`). Postgres rechaza el upsert con «ON CONFLICT DO UPDATE
+ * cannot affect row a second time» (medido 2026-10-05 en `live-now-ingest`).
+ */
+export function dedupeById(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const byId = new Map<unknown, Record<string, unknown>>();
+  for (const row of rows) byId.set(row['id'], row);
+  return [...byId.values()];
+}
+
 export interface SupabaseWriterOptions {
   url: string;
   serviceRoleKey: string;
@@ -73,7 +88,7 @@ export class SupabaseWriter implements IngestWriter {
 
   private async flushVenues(): Promise<void> {
     if (this.venueBatch.length === 0) return;
-    const rows = this.venueBatch;
+    const rows = dedupeById(this.venueBatch);
     this.venueBatch = [];
     this.requestCount += 1;
     const { error } = await this.client
@@ -84,8 +99,8 @@ export class SupabaseWriter implements IngestWriter {
 
   /** Vuelca eventos e instancias en un POST cada uno. */
   private async flushRows(): Promise<void> {
-    const events = this.eventBatch;
-    const instances = this.instanceBatch;
+    const events = dedupeById(this.eventBatch);
+    const instances = dedupeById(this.instanceBatch);
     this.eventBatch = [];
     this.instanceBatch = [];
     if (events.length > 0) {
