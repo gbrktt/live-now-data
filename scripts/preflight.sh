@@ -99,8 +99,23 @@ rows=$(rpc get_nearby_events "$RPC_ARGS")
 if [[ "$rows" == *'"code"'* ]]; then
   bad "RPC no invocable: $(cut -c1-160 <<<"$rows")"
 else
-  ncols=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(len(d[0]) if d else 0)" "$rows" 2>/dev/null || echo 0)
-  if [ "$ncols" = "16" ]; then ok "RPC devuelve 16 columnas (contrato estable)"; else bad "RPC devuelve $ncols columnas (esperado 16)"; fi
+  # Contrato por columnas clave, no por número mágico: la 0004 añadió
+  # total_count (window function) a las 16 columnas base → 17 en total.
+  # Verificado contra la migración versionada 20260914000004 (2026-10-08);
+  # el check «=16» quedó con el contrato pre-0004 y rompía Live checks.
+  cols=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+keys = set(d[0].keys()) if d else set()
+need = {'id', 'title', 'starts_at', 'live_now', 'is_favorite', 'distance_km', 'total_count'}
+missing = sorted(need - keys)
+print('OK' if not missing else 'FALTAN: ' + ','.join(missing))
+" "$rows" 2>/dev/null || echo "ERROR-parse")
+  if [ "$cols" = "OK" ]; then
+    ok "RPC con todas las columnas clave del contrato (incl. total_count)"
+  else
+    bad "RPC contrato roto → $cols"
+  fi
 fi
 
 probe=$(rpc get_nearby_events "${RPC_ARGS//$ANON/no-es-uuid}")
