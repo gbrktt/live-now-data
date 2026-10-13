@@ -22,6 +22,7 @@ import { BcnOpenNormalizer } from './normalize/bcn-open.ts';
 import { MadridOpenNormalizer } from './normalize/madrid-open.ts';
 import { TicketmasterNormalizer } from './normalize/ticketmaster.ts';
 import { runIngest } from './orchestrator.ts';
+import { runReminderPass } from './notifications/sender.ts';
 import { SupabaseWriter } from './persist/supabase.ts';
 import type {
   EventSourceAdapter,
@@ -50,6 +51,10 @@ export interface Env {
   MADRID_OPEN_URL?: string;
   /** `false` apaga la agenda de Madrid sin desplegar. */
   MADRID_OPEN_ENABLED?: string;
+  /** `false` apaga el emisor de recordatorios push sin desplegar. */
+  PUSH_ENABLED?: string;
+  /** Anticipación del recordatorio push en horas (default 6). */
+  PUSH_WITHIN_HOURS?: string;
   // Index signature para poder pasar Env a parseConfig (Record<string, string|undefined>).
   [key: string]: string | undefined;
 }
@@ -350,6 +355,14 @@ function sourcesForTier(
 }
 
 async function executeScheduled(env: Env, cron: string): Promise<void> {
+  // Cron propio del emisor de recordatorios push (cada 15 min). Es un trigger
+  // aparte del de ingesta a propósito: la frescura del aviso («empieza en X h»)
+  // no necesita esperar al siguiente barrido T1/T2/T3.
+  if (cron === PUSH_CRON) {
+    await runPushReminders(env);
+    return;
+  }
+
   const tier = tierFromCron(cron);
   const config = parseConfig(env);
   const sources = sourcesForTier(
@@ -359,6 +372,25 @@ async function executeScheduled(env: Env, cron: string): Promise<void> {
   );
   for (const source of sources) {
     await runSourceScheduled(env, tier, source);
+  }
+}
+
+/** Cron del emisor de recordatorios (cada 15 min). Debe coincidir con wrangler.jsonc. */
+const PUSH_CRON = '*/15 * * * *';
+
+/** Una pasada de recordatorios; nunca lanza (un fallo de push no tumbla el cron). */
+async function runPushReminders(env: Env): Promise<void> {
+  const config = parseConfig(env);
+  if (!config.pushEnabled) {
+    console.log('[push] desactivado por PUSH_ENABLED=false');
+    return;
+  }
+
+  try {
+    const result = await runReminderPass(env, { withinHours: config.pushWithinHours });
+    console.log('[push] pasada completada', result);
+  } catch (error) {
+    console.error('[push] error en la pasada de recordatorios', describeError(error));
   }
 }
 

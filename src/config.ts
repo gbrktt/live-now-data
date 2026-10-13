@@ -60,6 +60,10 @@ export interface DataConfig {
   madridOpenUrl?: string;
   /** Deja la fuente municipal de Madrid apagada sin tocar el código. */
   madridOpenEnabled?: boolean;
+  /** Apaga el emisor de recordatorios push sin desplegar. */
+  pushEnabled?: boolean;
+  /** Anticipación del recordatorio push, en horas (default 6). */
+  pushWithinHours?: number;
 }
 
 export function parseConfig(
@@ -104,6 +108,10 @@ export function parseConfig(
     bcnOpenEnabled: env['BCN_OPEN_ENABLED'] !== 'false',
     madridOpenUrl: env['MADRID_OPEN_URL'],
     madridOpenEnabled: env['MADRID_OPEN_ENABLED'] !== 'false',
+    pushEnabled: env['PUSH_ENABLED'] !== 'false',
+    pushWithinHours: Number.isFinite(Number(env['PUSH_WITHIN_HOURS']))
+      ? Number(env['PUSH_WITHIN_HOURS'])
+      : 6,
   };
 }
 
