@@ -6,6 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "triggers": {
     "crons": [
+      "*/15 * * * *", // recordatorios push (favoritos que empiezan pronto)
       "*/30 * * * *", // T1: próximas 48h (frescura now/tonight)
       "0 3,11 * * *", // T2: próximos 7 días (estado de venta, repromesis)
       "0 5 * * *"     // T3: catálogo completo (+lookahead) diario
@@ -22,6 +23,11 @@
     // C2 · tercera fuente: agenda cultural municipal de Madrid (datos.madrid.es,
     // mismo patrón que BCN: un scope por ventana en T2/T3, sin T1).
     // Apagable sin desplegar con MADRID_OPEN_ENABLED=false.
-    "MADRID_OPEN_ENABLED": "true"
+    "MADRID_OPEN_ENABLED": "true",
+    // Emisor de recordatorios push (Expo Push Service, gratis). Avisa de los
+    // eventos favoritos que empiezan dentro de PUSH_WITHIN_HOURS. Apagable con
+    // PUSH_ENABLED=false.
+    "PUSH_ENABLED": "true",
+    "PUSH_WITHIN_HOURS": "6"
   }
 }
