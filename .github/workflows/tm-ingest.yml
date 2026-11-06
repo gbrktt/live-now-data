@@ -1,0 +1,51 @@
+name: Ticketmaster Ingestion
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    name: Manual trigger for TM ingestion
+  repository_dispatch:
+    types: [tm-ingest]
+
+jobs:
+  ingest-tm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Execute Ingest Orchestrator
+        env:
+          TICKETMASTER_API_KEY: ${{ secrets.TICKETMASTER_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          INGEST_ADMIN_TOKEN: ${{ secrets.INGEST_ADMIN_TOKEN }}
+          CITIES: madrid|40.4168,-3.7038|50;barcelona|41.3874,2.1686|50;valencia|39.4699,-0.3763|40;sevilla|37.3891,-5.9845|40;bilbao|43.2630,-2.9350|35
+          LOOKAHEAD_DAYS: 7
+          DAILY_QUOTA: 4000
+          SCOPE_MODE: city
+          ENV: development
+        run: |
+          cd /workspace/live-now-data
+          node src/index.ts --scope-mode city --lookahead-days 7
+      
+      - name: Verify Ingestion Results
+        run: |
+          echo "Verifying ingestion results..."
+
